@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Refuses a commit that stages session scratch or any file over 10 MB, then runs scripts/lint.py --cheap.
+# A source session force-added 1.1 GB of sessions/*/scratch/ past .gitignore and the push was refused.
+# Install once per clone: scripts/hooks/install.sh.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+limit=$((10 * 1024 * 1024))
+bad=0
+while IFS= read -r -d '' path; do
+    case $path in
+        sessions/*/scratch/*) echo "pre-commit: refused, session scratch is never committed: $path" >&2; bad=1; continue ;;
+    esac
+    size=$(git cat-file -s ":$path" 2>/dev/null || echo 0)
+    if (( size > limit )); then
+        echo "pre-commit: refused, $path is $size bytes (limit $limit)" >&2
+        bad=1
+    fi
+done < <(git diff --cached --name-only --diff-filter=AM -z)
+python3 scripts/lint.py --cheap || bad=1
+exit $bad

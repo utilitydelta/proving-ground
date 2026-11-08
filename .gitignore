@@ -1,0 +1,10 @@
+# Session scratch: experiments and run output, never committed (the pre-commit hook refuses it too).
+sessions/*/scratch/
+# Raw factory iteration transcripts stay local; units/ records carry what the human reads.
+sessions/*/iterations/
+# Factory job state while a runner lives; finished jobs (done/) are evidence and get committed.
+sessions/*/jobs/running/
+sessions/*/STOP
+# scripts/run.sh heavy-run slots and other per-machine runtime state.
+.run/
+__pycache__/
