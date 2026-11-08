@@ -31,7 +31,7 @@ Group decisions that stand or fall together only when the human says so.
 - A decision the human changes becomes a new decision (`scripts/new-id.sh decision`), `decided_by: human-informed`, `status: confirmed`, and the old one is overturned. History lines on every decision it collides with.
 - **Overturn purge.** Each overturn lists in `report.md` the docs, harnesses, skills and lead code that carry the old concept (grep its wording). Purge docs, harnesses and skills this session; lead code becomes a queued unit or a `scraps.md` line.
 - `scripts/decisions.py stats` before and after into `report.md`; `scripts/decisions.py check` passes.
-- **Trigger.** Propose to the human when the next close-off should run: a provisional count, or an event such as a component landing. A rising overturn rate for `bot` calls is the case for running it sooner.
+- **Trigger.** Check the close-off count in `AGENTS.md` `## Project` against what this session saw. A rising overturn rate for `bot` calls is the case for lowering it; propose the new count to the human.
 - What the human leaves open stays on the agenda with the reason.
 
 Run `finish`.

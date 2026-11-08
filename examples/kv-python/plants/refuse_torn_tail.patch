@@ -1,0 +1,15 @@
+# Calls a short body corruption, so recovery refuses a torn write it must drop.
+# check: python3 examples/kv-python/harness/sim.py --tree "$TREE" --seeds 200 --tape-dir "$PLANT_OUT"
+# timeout: 60
+diff --git a/kvcore.py b/kvcore.py
+--- a/kvcore.py
++++ b/kvcore.py
+@@ -92,7 +92,7 @@ def read_record(log: bytes, pos: int) -> Record | Bad:
+     start = pos + HEADER_LEN
+     end = start + body_len
+     if end > len(log):
+-        return Bad("short body", at_tail=True)
++        return Bad("short body", at_tail=False)
+     body = log[start:end]
+     if zlib.crc32(body) != body_crc:
+         return Bad("body checksum mismatch", at_tail=end == len(log))

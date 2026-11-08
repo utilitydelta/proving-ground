@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Sourced, never run. Loads project.env into the caller's shell and resolves its paths.
 #
-#   source "$(dirname "$0")/lib/env.sh"     # sets ROOT, then every KEY in project.env
+#   source "$(dirname "$0")/lib/env.sh"     # sets ROOT, every KEY in project.env, RUN_DIR and PG_TMP
 #
 # A variable already set in the environment wins over project.env, so a test or a one-off run can point
 # HUMAN_REPO or FACTORY_READ_ONLY elsewhere without editing the file. HUMAN_REPO and LEAD_REPO come back
@@ -26,36 +26,32 @@ load_project_env() {
     for key in HUMAN_REPO LEAD_REPO; do
         [[ -n ${!key:-} && ${!key} != /* ]] && printf -v "$key" '%s' "$ROOT/${!key}"
     done
-    RUN_TIMEOUT=${RUN_TIMEOUT:-600}
+    RUN_TIMEOUT=${RUN_TIMEOUT:-300}
     HEAVY_JOBS=${HEAVY_JOBS:-1}
+    # Per-machine runtime state: heavy slots, run logs, build output. Tests point it at a temp dir.
+    RUN_DIR=${RUN_DIR:-$ROOT/.run}
+    # Root for every temp dir the scripts make (gate and plant snapshots): `mktemp -d "$PG_TMP/x.XXXXXX"`. Under
+    # .run/ so scripts/clean-tmp.sh can clear it by literal path; $TMPDIR copies piled up with no way to delete them.
+    PG_TMP=${PG_TMP:-$RUN_DIR/tmp}
+    mkdir -p "$PG_TMP"
+    if [[ -n ${HUMAN_REPO:-} && ! -d $HUMAN_REPO ]]; then
+        echo "env: warning: HUMAN_REPO $HUMAN_REPO does not exist; set it in project.env" >&2
+    fi
     return 0
 }
 
-
-# Bytes from a size like 8G, 512M, 20G or a plain number of bytes.
-size_bytes() {
-    local n=${1%[KkMmGgTt]} unit=${1: -1}
-    [[ $n =~ ^[0-9]+$ ]] || { echo "env: bad size $1" >&2; return 1; }
-    case $unit in
-        K|k) echo $(( n << 10 )) ;; M|m) echo $(( n << 20 )) ;; G|g) echo $(( n << 30 )) ;; T|t) echo $(( n << 40 )) ;;
-        *) echo "$n" ;;
-    esac
-}
-
-# MEM_CAP: a command prefix that runs its argument under MEMORY_MAX. Prefer a systemd user scope (the whole process
-# tree is capped and an OOM kill stays inside it); fall back to ulimit -v per process, with a warning, where
-# systemd-run cannot start a user scope (macOS, containers, a systemd service without a user bus).
+# MEM_CAP: a command prefix that runs its argument under MEMORY_MAX in a systemd user scope: the whole process tree
+# is capped and an OOM kill stays inside it. Where systemd-run cannot start a user scope (macOS, containers, a service
+# without a user bus) the run goes uncapped with a warning. Never `ulimit -v` or `prlimit --data`: both count address
+# space reserved but never touched, which kills ASAN (terabytes of shadow), Go and the JVM at startup and reads as a
+# red test.
 set_mem_cap() {
     MEM_CAP=()
     [[ -n ${MEMORY_MAX:-} ]] || return 0
     if command -v systemd-run > /dev/null && systemd-run --user --scope -q true 2> /dev/null; then
         MEM_CAP=(systemd-run --user --scope -q -p "MemoryMax=$MEMORY_MAX" -p MemorySwapMax=0)
     else
-        local bytes
-        bytes=$(size_bytes "$MEMORY_MAX") || return 1
-        echo "env: systemd-run --user unavailable, capping with ulimit -v (per process, not per tree)" >&2
-        # shellcheck disable=SC2016
-        MEM_CAP=(bash -c 'ulimit -v "$0" && exec "$@"' "$(( bytes >> 10 ))")
+        echo "env: warning: no systemd user scope here, so MEMORY_MAX=$MEMORY_MAX is not enforced; watch memory by hand" >&2
     fi
 }
 

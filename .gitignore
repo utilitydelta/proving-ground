@@ -4,6 +4,7 @@ sessions/*/scratch/
 sessions/*/iterations/
 # Factory job state while a runner lives; finished jobs (done/) are evidence and get committed.
 sessions/*/jobs/running/
+sessions/*/jobs/busy-until
 sessions/*/STOP
 # scripts/run.sh heavy-run slots and other per-machine runtime state.
 .run/

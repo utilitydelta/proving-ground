@@ -9,7 +9,7 @@
   scripts/decisions.py stats              count by decided_by and status, overturn rate per source, provisional count
   scripts/decisions.py brief <session>    one prose line per decision of that session, owner and status spelled out
   scripts/decisions.py brief <text>       the same for decisions whose touches contains <text>
-  scripts/decisions.py check              exit 1 on a malformed file
+  scripts/decisions.py check              exit 1 on a malformed file or an unfilled <...> skeleton placeholder
 
 Files are decisions/NNN-<slug>.md with a '# D-NNN: <title>' line. DECISIONS_DIR overrides the folder (tests).
 Columns: id, status, decided_by, touches, title.
@@ -26,6 +26,17 @@ BY = ("bot", "human-asked", "human-informed", "none")
 REQUIRED = ("status", "decided_by", "touches", "revisit_when", "session")
 # A trigger is an event (a module lands, a bench exists). A session number is a date in disguise: nobody watches for it.
 SESSION_TRIGGER = re.compile(r"\bsession-v?\d+\b", re.I)
+
+
+# A skeleton placeholder from scripts/new-id.sh left unfilled: <...> holding three or more words. Generic types such as
+# Vec<u8> or Map<K, V> hold fewer and pass.
+PLACEHOLDER = re.compile(r"<(?:[^<>\n]*\s){2,}[^<>\n]*>")
+
+
+def placeholders(path):
+    """Lines still holding a skeleton placeholder, frontmatter and body alike."""
+    return [f"line {n} still holds a skeleton placeholder: {m.group(0)}"
+            for n, line in enumerate(path.read_text().splitlines(), 1) for m in [PLACEHOLDER.search(line)] if m]
 
 
 def load(path):
@@ -108,7 +119,7 @@ def brief(ds, key):
 
 
 def check(ds):
-    bad = [(d["path"].name, p) for d in ds for p in problems(d)]
+    bad = [(d["path"].name, p) for d in ds for p in problems(d) + placeholders(d["path"])]
     ids = [d["id"] for d in ds]
     bad += [(i, "duplicate id") for i in sorted({i for i in ids if ids.count(i) > 1})]
     for name, p in bad:

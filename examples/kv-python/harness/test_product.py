@@ -2,7 +2,7 @@ import os
 import unittest
 from pathlib import Path
 
-from mutations import DEFAULT_TREE, load_product
+from loader import DEFAULT_TREE, load_product
 
 kv = load_product(Path(os.environ.get("KV_TREE", DEFAULT_TREE)))
 

@@ -14,12 +14,13 @@ Load `build-method:writing-style` and `build-method:hierarchical-context-docs` f
 - `git status --short`. Every untracked or modified file is kept with a reason, moved or deleted. No loose proposal or note files at the repo root: they go in the session folder or `docs/roadmap.md`.
 - `git config core.hooksPath` says `scripts/hooks`; if not, `scripts/hooks/install.sh`. Without the hook, scratch gets force-added and the push is refused for size.
 - Throwaway tests and bins outside `scratch/` are deleted or promoted with a name that says what they prove. Dead code the session left: delete.
+- Scratch over `SCRATCH_BUDGET` (`scripts/lint.py` says): clear finished sessions' scratch, never this one's, one literal `rm -rf sessions/<session>/scratch/<dir>` per entry (`AGENTS.md` Compute).
 - Background processes the session started: `ps`, then stop them. No test binary outlives the session.
 - The human repo is untouched: `git -C <human repo> status` shows only the human's own changes.
 
 ## 2. Gate
 
-At least `scripts/gate.sh <tree> quick` and `harness`, `full` when the session changed a harness or lead code, through `scripts/run.sh -H`. State each command and its result in `report.md`, stage by stage when any is FAIL or BLIND. Red is reported red, never smoothed.
+At least `scripts/gate.sh <tree> quick` and `harness`, `full` when the session changed a harness or lead code, through `scripts/run.sh -H`. The gate judges bot trees at HEAD, so commit the work locally first; step 8 amends that commit and pushes. State each command and its result in `report.md`, stage by stage when any is FAIL or BLIND. Red is reported red, never smoothed.
 
 ## 3. Docs: current state only
 
@@ -55,7 +56,7 @@ Check the session did none of these; one found goes in `report.md` and the next 
 ## 7. Slop check and lint
 
 ```
-grep -n -E "—|key insight|it's worth noting|comprehensive|robust|seamless|delve|leverag|in order to" <files>
+grep -n -P "\x{2014}|key insight|it's worth noting|comprehensive|robust|seamless|delve|leverag|in order to" <files>
 ```
 
 Also: hedges, fake balance, wrap-up sentences, numbers with no command or file behind them, TODOs without an owner. Fix each. Then `scripts/lint.py`, `scripts/decisions.py check` and `scripts/risks.py check` pass.

@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # Unattended runner for a Factory session: a fresh `claude -p` orchestrator per iteration, state on disk.
+# Linux only (bwrap, findmnt, GNU date -d, stat -c); interactive scripts stay portable, this one does not need to.
 #
 #   scripts/factory.sh <session-dir> --until "<date -d expression>" [--model M] [--max-iterations N] [--gap MINUTES]
 #
 # Each iteration loads the `factory` skill against <session-dir>, does one bounded step and exits. Queued jobs
-# (<session-dir>/jobs/pending/*.sh) run in the background with no Claude process waiting on them, at most HEAVY_JOBS
-# at once, so a long test or simulation never holds a context past the prompt-cache TTL. Each job runs under a hard
-# timeout: `# timeout: <seconds>` in its first 10 lines, else 3600. A timeout is written into the job's .out.
-# When an iteration changes nothing while a job runs, the runner waits for a job instead of iterating.
+# (<session-dir>/jobs/pending/*.sh) run in the background with no Claude process waiting on them, so a long test or
+# simulation never holds a context past the prompt-cache TTL. Each job is a heavy run through scripts/run.sh -H: it
+# shares the machine's HEAVY_JOBS slots (RUN_DIR/heavy/) with every interactive heavy run, under a hard timeout from
+# `# timeout: <seconds>` in its first 10 lines, else 3600. A timeout is written into the job's .out. When every slot is
+# held elsewhere (run.sh exit 75) the job goes back to pending and no job starts for FACTORY_BUSY_BACKOFF seconds
+# (default 60). When an iteration changes nothing while a job runs or waits, the runner waits for a job to finish
+# instead of iterating.
 #
 # Every Claude process and job runs in a bwrap jail with HUMAN_REPO and FACTORY_READ_ONLY (project.env) read-only.
 # No bwrap: the runner refuses to start unless FACTORY_NO_JAIL=1.
@@ -19,8 +23,8 @@
 # `## Contract`, `## Decisions` or `## Commits` stops the runner. Raw transcripts are gzipped in iterations/.
 #
 # Environment: CLAUDE_BIN (claude binary), BWRAP_BIN (bwrap binary), FACTORY_NO_JAIL=1 (run unjailed),
-# plus any project.env key. Every iteration and every job runs under MEMORY_MAX (see lib/env.sh set_mem_cap); a job's
-# real exit status, an OOM kill included, lands in jobs/done/<name>.exit.
+# FACTORY_BUSY_BACKOFF, plus any project.env key (RUN_DIR too). Every iteration and every job runs under MEMORY_MAX
+# (see lib/env.sh set_mem_cap); a job's real exit status, an OOM kill included, lands in jobs/done/<name>.exit.
 set -uo pipefail
 # No -e: the loop inspects exit codes of claude and jobs and must survive every one of them.
 
@@ -34,6 +38,7 @@ max_iterations=1000
 gap=0
 pause_every=3
 default_job_timeout=3600
+busy_backoff=${FACTORY_BUSY_BACKOFF:-60}
 while (( $# )); do
     case $1 in
         --until) until_expr=$2; shift 2 ;;
@@ -83,6 +88,7 @@ else
 fi
 set_mem_cap || exit 2
 scope=("${MEM_CAP[@]}")
+[[ -x $ROOT/scripts/run.sh ]] || { echo "factory: $ROOT/scripts/run.sh is not executable" >&2; exit 2; }
 
 mkdir -p "$session/jobs/pending" "$session/jobs/running" "$session/jobs/done" "$session/iterations"
 # A job left in running/ by a killed runner starts again.
@@ -111,14 +117,22 @@ job_timeout() {
     echo "${t:-$default_job_timeout}"
 }
 
-# One job, start to finish: moved to running/, run under its timeout, output and exit code in done/.
+# One job, start to finish: moved to running/, run in a heavy slot under its timeout, output and exit code in done/.
+# Refused a slot, it goes back to pending and starts a backoff.
 run_job() {
-    local name=$1 limit code start=$SECONDS
+    local name=$1 limit code start=$SECONDS out=$session/jobs/done/$1.out
     limit=$(job_timeout "$session/jobs/running/$name.sh")
+    # Output of an earlier attempt that a stopped runner killed: kept beside, never overwritten.
+    [[ -e $out ]] && mv "$out" "$out.$(date +%s)"
     note "job $name start, timeout ${limit} s"
-    "${scope[@]}" "${jail[@]}" timeout -k 30 "$limit" bash "$session/jobs/running/$name.sh" \
-        > "$session/jobs/done/$name.out" 2>&1
+    "${jail[@]}" "$ROOT/scripts/run.sh" -H -t "$limit" -l "$out" -- bash "$session/jobs/running/$name.sh" 2> /dev/null
     code=$?
+    if (( code == 75 )); then
+        mv "$session/jobs/running/$name.sh" "$session/jobs/pending/"
+        echo $(( $(date +%s) + busy_backoff )) > "$session/jobs/busy-until"
+        note "job $name back in pending: every heavy slot is busy (run.sh exit 75); next try in ${busy_backoff} s"
+        return
+    fi
     # 137 is also an OOM kill under MEMORY_MAX; only the clock tells the two apart.
     if (( code == 124 || (code == 137 && SECONDS - start >= limit) )); then
         echo "runner: job killed by its ${limit} s timeout (exit $code)" >> "$session/jobs/done/$name.out"
@@ -139,7 +153,8 @@ start_job() {
         # Children of a killed worker must die before they can move their job to done/.
         trap 'kill $(jobs -p) 2> /dev/null; exit 143' TERM
         while job_pending || [[ -n $(jobs -pr) ]]; do
-            if job_pending && (( $(running_count) < HEAVY_JOBS )); then
+            if job_pending && (( $(running_count) < HEAVY_JOBS )) \
+                && (( $(date +%s) >= $(cat "$session/jobs/busy-until" 2> /dev/null || echo 0) )); then
                 next=("$session"/jobs/pending/*.sh)
                 name=$(basename "${next[0]}" .sh)
                 mv "${next[0]}" "$session/jobs/running/"
@@ -164,18 +179,21 @@ stop_worker() {
 }
 trap stop_worker EXIT
 
-# Blocks until one running job ends, the deadline passes or STOP appears. One job, not the whole queue: the next
-# iteration may have work the finished job unblocked.
+# Finished jobs, name and mtime of each .exit, so a rerun of a finished name counts as new.
+finished() { stat -c '%n %Y' "$session"/jobs/done/*.exit 2> /dev/null | sort; }
+
+# Blocks until one job finishes, the deadline passes or STOP appears. One job, not the whole queue: the next
+# iteration may have work the finished job unblocked. A job sent back to pending by a busy slot is not finished, so a
+# backoff never wakes an iteration.
 wait_for_job() {
-    local before
-    before=$(compgen -G "$session/jobs/running/*.sh" | sort)
-    note "waiting on job: $(echo "$before" | xargs -r -n1 basename | sed 's/\.sh$//' | paste -sd' ')"
+    local before now
+    before=$(finished)
+    note "waiting on job: $(for f in "$session"/jobs/running/*.sh "$session"/jobs/pending/*.sh; do
+        [[ -e $f ]] && basename "$f" .sh; done | paste -sd' ')"
     while [[ ! -e $session/STOP ]] && (( $(date +%s) < deadline )); do
         start_job
-        local now
-        now=$(compgen -G "$session/jobs/running/*.sh" | sort)
-        [[ -z $before && -n $now ]] && before=$now
-        [[ -n $before ]] && comm -23 <(echo "$before") <(echo "$now") | grep -q . && break
+        now=$(finished)
+        [[ $now != "$before" ]] && break
         job_running || job_pending || break
         sleep 5
     done

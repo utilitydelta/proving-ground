@@ -9,7 +9,7 @@ Crash, retry and interleaving bugs live in schedules no unit test writes by hand
 
 ## The shape the code under test needs
 
-A core that takes commands and completions and **returns effects** (write this, send that, set a timer) instead of performing them. No I/O, clock, randomness or threads inside it. State valid between any two calls. Flag a drift from this as a one-way door: cheap now, expensive once code builds on it.
+The simulator drives the code at the seam `AGENTS.md` `## Project` declares: a HAL, a repository interface, an IO trait, or best, a core that takes commands and completions and **returns effects** (write this, send that, set a timer). Behind the seam: no I/O, clock, randomness or threads, and state valid between any two calls. Where a seam is declared, I/O or time crossing it is drift: flag it as a one-way door, cheap now, expensive once code builds on it. No seam declared: no drift to flag; propose one to the human when a crash or concurrency property needs a simulator.
 
 ## Bot side owns
 
@@ -37,7 +37,7 @@ The checker reaches internals only through a surface the human chose: `snapshot(
 
 ## Teeth
 
-- **Mutations as patches.** Each deliberate break (premature ack, skipped version bump, missing repair) fails at a documented seed. A model toggle per load-bearing rule. `scripts/gate.sh <tree> harness` re-applies them.
+- **Plants.** Each deliberate break (premature ack, skipped version bump, missing repair) is a plant patch (`harness/README.md`) whose `# check:` replays the documented seed. A model toggle per load-bearing rule. `scripts/plants.sh` runs them in the gate's harness tier.
 - **One tape per check** whose only violation is that check. A toggle test that asserts only "violations > 0" lets most checks carry no weight.
 - A model column labelled "prior system" gets each branch checked against the code line it cites before a conclusion rests on it.
 

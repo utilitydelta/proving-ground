@@ -1,0 +1,2 @@
+glob	command	tier	budget_s	plant
+# src/store/**/*.py	scripts/run.sh -t 60 -- python3 harness/python/test_store.py	targeted	20	harness/python/plants/store-lost-ack.patch

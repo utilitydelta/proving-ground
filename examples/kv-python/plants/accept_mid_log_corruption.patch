@@ -1,0 +1,15 @@
+# Treats every bad record as a torn tail, so recovery silently truncates mid-log corruption instead of refusing it.
+# check: python3 examples/kv-python/harness/sim.py --tree "$TREE" --seeds 200 --tape-dir "$PLANT_OUT"
+# timeout: 60
+diff --git a/kvcore.py b/kvcore.py
+--- a/kvcore.py
++++ b/kvcore.py
+@@ -120,7 +120,7 @@ def open_log(log: bytes) -> tuple["KvCore", list[Effect]]:
+     while pos < len(log):
+         rec = read_record(log, pos)
+         if isinstance(rec, Bad):
+-            if rec.at_tail:
++            if rec.at_tail or True:
+                 return KvCore(state, pos), [Truncate(pos)]
+             raise CorruptLog(pos, rec.reason)
+         apply(state, rec.kind, rec.key, rec.value)

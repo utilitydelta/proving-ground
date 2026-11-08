@@ -5,5 +5,5 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 git config --local core.hooksPath scripts/hooks
-chmod +x scripts/hooks/pre-commit scripts/hooks/no-rm-rf.sh
+chmod +x scripts/hooks/pre-commit scripts/hooks/no-rm-rf.sh scripts/hooks/guard-human-repo.sh
 echo "hooks: core.hooksPath = scripts/hooks"

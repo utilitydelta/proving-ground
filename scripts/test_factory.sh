@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # scripts/factory.sh against a stub claude: each stop path, the job queue, heavy-job concurrency, job timeouts, resume
-# numbering, the session-limit sleep decision, the read-only jail and the no-bwrap refusal. Spends no quota.
+# numbering, the session-limit sleep decision, the read-only jail, the no-bwrap refusal, and jobs sharing run.sh heavy
+# slots: a busy slot sends the job back to pending with a backoff, a heavy run inside a job shares the job's slot.
+# Spends no quota. Heavy slots live in a temp RUN_DIR, never the machine's .run/.
 #
 #   scripts/test_factory.sh
 #
@@ -10,6 +12,9 @@ set -uo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(mktemp -d)
+export RUN_DIR=$root/rundir
+# Run from a heavy gate stage, the caller's slot must not leak into the cases that count slots.
+unset RUN_HEAVY_SLOT
 fail() { echo "FAIL: $*"; exit 1; }
 
 # The stub reads its behaviour from $STUB_MODE and the session dir from the prompt.
@@ -44,6 +49,11 @@ case $STUB_MODE in
     weekly) echo '{"type":"assistant","text":"You'"'"'ve hit your weekly limit · resets Mon 12:00am"}' ;;
     session) echo '{"type":"assistant","text":"You'"'"'ve hit your 5-hour limit · resets 11:59pm"}' ;;
     stopjob) echo "sleep 60" > "$session/jobs/pending/a.sh"; echo "step $n" >> "$state"; sleep 3; touch "$session/STOP" ;;
+    busy) if (( n == 1 )); then echo "first" >> "$state"; echo "echo ran" > "$session/jobs/pending/a.sh"
+          elif [[ -e $session/jobs/done/a.exit ]]; then echo "Status: done" >> "$state"; fi ;;
+    nested) if (( n == 1 )); then echo "first" >> "$state"
+                echo "$RUN_SH -H -t 5 -- echo inner-ok" > "$session/jobs/pending/a.sh"
+            elif [[ -e $session/jobs/done/a.exit ]]; then echo "Status: done" >> "$state"; fi ;;
     jail) echo hacked > "$JAIL_TARGET/f" 2>/dev/null; echo hacked > "$JAIL_EXTRA/f" 2>/dev/null; echo "Status: done" >> "$state" ;;
 esac
 echo '{"type":"result","total_cost_usd":0.01,"num_turns":1}'
@@ -57,6 +67,7 @@ run() {
     local mode=$1; shift
     local s=$root/$mode; mkdir -p "$s"; : > "$s/session-state.md"
     STUB_MODE=$mode CLAUDE_BIN=$root/claude HUMAN_REPO=$ro FACTORY_READ_ONLY=$extra JAIL_TARGET=$ro JAIL_EXTRA=$extra \
+        RUN_SH=$here/run.sh FACTORY_BUSY_BACKOFF=2 \
         timeout 120 "$here/factory.sh" "$s" "$@" > "$s/runner.out" 2>&1
     echo $? > "$s/exit"
 }
@@ -87,7 +98,7 @@ grep -q "stop: units done with no complete record in units/: u1" "$root/record/p
 # Job a ends while iteration 2 still runs; b must start then, not after iteration 2 exits.
 run twojobs --until "+1 hour"
 grep -q "stop: Status: done" "$root/twojobs/progress.md" || fail "twojobs: $(cat "$root/twojobs/runner.out")"
-order=$(grep -oE "iteration [0-9]+( exit)?|job [ab] (start|exit)" "$root/twojobs/progress.md" | tr '\n' ',')
+order=$(grep -oE "iteration [0-9]+( exit)?|job a exit|job b start" "$root/twojobs/progress.md" | tr '\n' ',')
 [[ $order == *"iteration 2,job a exit,job b start,"*"iteration 2 exit"* ]] \
     || fail "twojobs: expected b to follow a without an iteration between: $order"
 
@@ -123,6 +134,24 @@ grep -q "stop: STOP file" "$root/stopjob/progress.md" || fail "stopjob: $(cat "$
 [[ -e $root/stopjob/jobs/pending/a.sh && ! -e $root/stopjob/jobs/done/a.exit ]] || fail "stopjob: job not back in pending"
 ! pgrep -f "$root/stopjob/jobs/running/" > /dev/null || fail "stopjob: job outlived the runner"
 
+# Every heavy slot held by another process: the job goes back to pending, retries after the backoff without waking an
+# iteration per retry, and runs once the slot frees.
+mkdir -p "$root/rundir/heavy/slot-1"; sleep 7 & holder=$!; echo $holder > "$root/rundir/heavy/slot-1/pid"
+HEAVY_JOBS=1 run busy --until "+1 hour"
+wait $holder 2> /dev/null
+grep -q "stop: Status: done" "$root/busy/progress.md" || fail "busy: $(cat "$root/busy/runner.out")"
+grep -q "job a back in pending: every heavy slot is busy" "$root/busy/progress.md" || fail "busy: never refused a slot"
+[[ $(cat "$root/busy/jobs/done/a.exit") == 0 ]] && grep -q '^ran$' "$root/busy/jobs/done/a.out" || fail "busy: job never ran"
+retries=$(grep -c "back in pending" "$root/busy/progress.md")
+(( retries <= 5 )) || fail "busy: $retries retries in about 7 s with a 2 s backoff"
+(( $(cat "$root/busy/n") <= 3 )) || fail "busy: $(cat "$root/busy/n") iterations; backoff retries woke iterations"
+
+# A heavy run inside a job shares the job's slot instead of exiting 75 against it.
+HEAVY_JOBS=1 run nested --until "+1 hour"
+grep -q "stop: Status: done" "$root/nested/progress.md" || fail "nested: $(cat "$root/nested/runner.out")"
+[[ $(cat "$root/nested/jobs/done/a.exit") == 0 ]] && grep -q inner-ok "$root/nested/jobs/done/a.out" \
+    || fail "nested: $(cat "$root/nested/jobs/done/a.out")"
+
 run jail --until "+1 hour"
 grep -q "stop: Status: done" "$root/jail/progress.md" || fail "jail: the stub never ran: $(cat "$root/jail/runner.out")"
 [[ $(cat "$ro/f") == orig ]] || fail "jail: the stub wrote through the HUMAN_REPO bind"
@@ -155,4 +184,4 @@ run done --until "-1 minute"
 [[ $(cat "$root/done/exit") == 2 ]] || fail "past deadline: expected refusal"
 
 [[ $root == "${TMPDIR:-/tmp}"/tmp.* ]] && rm -r -- "$root"
-echo "factory: 17 cases OK"
+echo "factory: 19 cases OK"

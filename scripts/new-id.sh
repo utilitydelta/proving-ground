@@ -6,12 +6,13 @@
 #   scripts/new-id.sh finding <slug> <session-dir>    -> <session-dir>/findings/NNN-<slug>.md
 #
 # Prints the path written. Without a session dir, decisions and risks name the highest-numbered session.
-# Picking the next number with `ls | tail` gave three duplicate ids in the source repo when agents ran in parallel:
-# the scan and the create here happen under one lock (mkdir is atomic), and the create itself refuses to overwrite.
+# The scan and the create happen under one lock (lib/alloc.sh), and the create itself refuses to overwrite.
 # DECISIONS_DIR and RISKS_DIR override the folders (tests).
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=lib/alloc.sh
+source "$root/scripts/lib/alloc.sh"
 usage() { sed -n 4,6p "$0" >&2; exit 2; }
 (( $# >= 2 )) || usage
 kind=$1 slug=$2 session_dir=${3:-}
@@ -29,22 +30,11 @@ if [[ -n $session_dir ]]; then
     session=$(basename "$(cd "$session_dir" && pwd)" | grep -oE '^session-v[0-9]+') \
         || { echo "new-id: $session_dir is not a sessions/session-vN-... folder" >&2; exit 2; }
 else
-    session=$(find "$root/sessions" -maxdepth 1 -type d -name 'session-v*' -printf '%f\n' 2>/dev/null \
-        | sed -nE 's/^(session-v[0-9]+).*/\1/p' | sort -t v -k2 -n | tail -1) || true
-    session=${session:-session-v0}
+    session=session-v$(highest_number "$root/sessions" 'session-v#-*')
 fi
 
-lock=$dir/.new-id.lock
-for _ in $(seq 1 100); do
-    mkdir "$lock" 2> /dev/null && break
-    sleep 0.1
-done
-[[ -d $lock ]] || { echo "new-id: $lock held for 10 s; remove it if no new-id.sh is running" >&2; exit 1; }
-trap 'rmdir "$lock"' EXIT
-
-highest=$(find "$dir" -maxdepth 1 -type f -name "${prefix}[0-9]*-*.md" -printf '%f\n' \
-    | sed -E "s/^${prefix}0*([0-9]+)-.*/\1/" | sort -n | tail -1)
-n=$(( ${highest:-0} + 1 ))
+take_lock "$dir" || exit 1
+n=$(( $(highest_number "$dir" "${prefix}#-*.md") + 1 ))
 num=$(printf %03d "$n")
 title=${slug//-/ }
 today=$(date +%F)

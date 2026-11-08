@@ -17,7 +17,7 @@ Two jobs.
 1. **A proving ground for empirical correctness.** Agents get a space to build their own tooling: deterministic simulators, reference models, blind oracles, fuzzers, crash probes, benches, a gate. Nothing counts as working until a check that can fail says so, and every check is proven able to fail first by planting a bug and watching it go red.
 2. **A provenance register.** An append-only history of everything the agents did, grouped by session, with the current state kept in `docs/` and two registers beside it: `decisions/` for every micro-decision (and whether the human has actually ruled on it) and `risks/` for every edge case the harnesses surface, scored before anyone adds state for it.
 
-This is not a dark factory, where no human reads the code. The human reads and rules on everything that matters, and types the production code. What agents add is evidence for each claim and a log of every call, so the human spends attention on rulings and not on hunting for bugs. Arr, every plank gets tested before the captain walks on it.
+Nothing ships unread. The human reads and rules on everything that matters, and types the production code. What agents add is evidence for each claim and a log of every call, so the human spends attention on rulings and not on hunting for bugs. Arr, every plank gets tested before the captain walks on it.
 
 ## The three trees
 
@@ -44,13 +44,29 @@ Skills here name plugin skills by full name (`build-method:writing-tests`) and n
 ## Adopting it
 
 1. Create a repo from this template next to the human repo.
-2. Fill `project.env` (paths, gate command, read-only dirs) and the `## Project` section of `AGENTS.md`.
-3. `scripts/hooks/install.sh`.
-4. Write `scripts/gate.sh` for your stack. Its contract is in the script header.
-5. Add harness workspaces under `harness/<language>/`, pointing at the human repo by path.
-6. Start the first session: `scripts/new-session.sh task <slug>` and load the `task` skill.
+2. Fill `project.env` (paths, read-only dirs, run caps) and the `## Project` section of `AGENTS.md`.
+3. `scripts/hooks/install.sh`. The Claude Code hooks (`.claude/settings.json`) refuse writes under the human repo and recursive deletes outside session scratch.
+4. Write the gate stages in `scripts/gate.sh`; its header holds the contract. Until then the stub prints BLIND and exits 2 for any tree but the example's.
+5. Add harness workspaces under `harness/<language>/`, depending on the human repo by path. `harness/README.md` has a recipe per ecosystem, the `coverage.tsv` columns and the plant format.
+6. `scripts/lint.py --adoption` passes.
+7. Load the `task` skill. It creates the session.
 
 `examples/kv-python/` is a worked example: a toy key-value store as the "human" code, a seeded simulator with a reference model, a checker, a planted mutation that the checker catches, and a gate. Read it before writing your first harness. Delete it once you have your own.
+
+## Week one
+
+Start with four skills: `task`, `fast-feedback`, `triage`, `finish`. That is enough to build a harness, prove it can fail, and leave a clean record. Add the rest when their trigger fires:
+
+| Mode | Start it when |
+|---|---|
+| `invariant` | Code is about to build on a promise nobody has priced (a fault rule, an end condition, an ordering) |
+| `closeoff` | `scripts/decisions.py provisional` passes the count the project picked in `## Project` |
+| `watch` | The human codes in the human repo and wants checks running beside them |
+| `debrief` | After a Watch chunk or a finished Task, to collect verdicts by name |
+| `tend` | Budgets drift, plants go BLIND, or scratch nears its budget |
+| `factory` | The gate and plants exist and are green; never before |
+
+Factory needs Linux, bwrap and Claude Code (`claude -p`). `.agents/skills` links the skills for Codex, which serves every other mode.
 
 ## Map
 

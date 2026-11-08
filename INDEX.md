@@ -1,15 +1,10 @@
 # Index
 
-Maintained by agents. Tend rebuilds it from the tree. A wrong row is a bug. Every agent reads this first, so it stays small: no line past 400 characters (`scripts/lint.py`). Detail goes in the linked doc, never the row.
+Maintained by agents; Tend rebuilds it from the tree. A wrong row is a bug. Every agent reads this first, so it stays small: detail goes in the linked doc, never the row.
 
 ## Coverage
 
-What covers which part of the product. Watch reads this to pick checks for a diff; Task reads it to find the delta.
-
-| Product area | Check | Tier | Budget | Planted fault it catches | Location |
-|---|---|---|---|---|---|
-
-Tier is `probe`, `targeted`, `quick`, `harness` or `full` (`fast-feedback`). A row without a measured budget or a planted fault is not finished.
+`harness/coverage.tsv` maps human-repo paths to checks, with tier, measured budget and the plant each row proves it catches (columns in `harness/README.md`). `scripts/affected.sh [base]` prints the targeted commands for a diff. Watch picks checks from it; Task reads it to find the delta.
 
 ## Tier budgets
 
@@ -20,10 +15,11 @@ Measured wall-clock per tier on this machine, re-measured at every Tend. A run p
 | quick | `scripts/gate.sh <tree> quick` | | | |
 | harness | `scripts/gate.sh <tree> harness` | | | |
 | full | `scripts/gate.sh <tree> full` | | | |
+| mutants | Tend's mutation run over files changed since the last Tend, per file | | | |
 
 ## Sessions
 
-One line each, under 150 characters: `session-vN-<mode>-<slug>`: outcome. Detail lives in the session's `report.md`.
+One line each, under 150 characters (`scripts/lint.py`): `session-vN-<mode>-<slug>: outcome`. Detail lives in the session's `report.md`.
 
 ## Precision
 

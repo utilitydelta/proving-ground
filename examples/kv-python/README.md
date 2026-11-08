@@ -12,11 +12,12 @@ Why bother for a toy? Because the shape is the point. Copy the shape, not the co
 | `harness/subject.py` | The seam both model and product sit behind | The code under test is never its own oracle |
 | `harness/model.py` | Reference model from the contract: an op list, an ack floor, the set of states a crash may leave | The code under test is never its own oracle |
 | `harness/adapter.py` | Thin adapter: performs effects on a simulated disk, injects faults between effect and completion | Faults at the effect boundary, no KV logic in the harness |
-| `harness/sim.py` | Seeded driver, checker, tapes, `--replay` | Evidence before speech: a tape is a claim anyone can rerun |
-| `harness/mutations.py` | Plants as text patches on a temp copy of the product | An experiment on human code edits a copy, never the tree |
-| `harness/plant_check.py` | Each plant goes red, the clean tree goes green | Green is not self-graded |
-| `harness/test_*.py` | Walkthrough of the product's life, torn-tail table, tape replay | `build-method:writing-tests` |
-| `gate.sh` | Stages under `timeout`, wall-clock per stage, nonzero on any red | Every run has a hard timeout; every tier has a measured budget |
+| `harness/loader.py` | Imports the product from any tree without writing `__pycache__` into it; digest of the source a tape ran | Agents never write in the human tree |
+| `harness/sim.py` | Seeded driver, checker, tapes, `--replay`, `--keep-going` | Evidence before speech: a tape is a claim anyone can rerun |
+| `harness/test_*.py` | Walkthrough of the product's life, torn-tail table, tape replay, gap arithmetic | `build-method:writing-tests` |
+| `plants/*.patch` | Planted bugs as unified diffs against `product/`, each naming the check that must go red | Green is not self-graded |
+| `../../scripts/plants.sh` | Applies each plant to a copy of the tree and runs its check; language-agnostic | An experiment on human code edits a copy, never the tree |
+| `gate.sh` | Snapshot, then stages under `scripts/run.sh`, one `OK/FAIL/BLIND` line each | Every run has a hard timeout; every tier has a measured budget |
 | `sample-records/` | D-001 (torn tail drop vs refuse) and R001 (crash between write and fsync), filled in | Decisions, Risks |
 
 ## What the checker holds the product to
@@ -33,45 +34,56 @@ A seed expands into an event list before the run starts. The run is a pure funct
 
 ## Plants
 
-| `KV_PLANT` | Bug | Measured catch rate, seeds 0..1999 | Worst gap between catching seeds |
-|---|---|---|---|
-| `ack_before_fsync` | ack on append completion | 1454 / 2000 | 6 |
-| `accept_mid_log_corruption` | every bad record treated as a torn tail | 1954 / 2000 | 2 |
-| `refuse_torn_tail` | a short body refused as corruption | 818 / 2000 | 14 |
+A plant is a bug written down as a patch, so the harness has to prove it can see it. Each file in `plants/` is a plain unified diff with paths relative to the product root (`a/kvcore.py`), headed by comment lines:
 
-The seed budget is 200 per plant, over ten times the worst measured gap. A plant whose anchor text no longer matches the product raises `PlantError` instead of applying nothing: a stale plant must never grade the sim green.
+```
+# Acks a write on its append completion, before fsync. A crash before fsync then loses an acked write.
+# check: python3 examples/kv-python/harness/sim.py --tree "$TREE" --seeds 200 --tape-dir "$PLANT_OUT"
+# timeout: 60
+diff --git a/kvcore.py b/kvcore.py
+...
+```
+
+`scripts/plants.sh <tree> <plants-dir>` copies the tree into a fresh `mktemp -d` per plant, `git apply`s the patch there, and runs the check from the repo root with `TREE` set to the patched copy. It runs each distinct check once on an unpatched copy too, which must be green: a check that crashes on its own would otherwise "catch" every plant. One line per plant: `OK` (check red), `FAIL` (check green, the harness is blind to this bug), `BLIND` (no check line, patch no longer applies, check red on the clean tree, or the run timed out or was refused). A patch that stops applying after the human edits the product is BLIND, never quietly skipped.
+
+Nothing here is Python-specific. A C or TypeScript adopter writes the same patch files against their own tree with `# check: make -C "$TREE" test` or `# check: npm --prefix "$TREE" test`, and `plants.sh` grades them the same way. The only contract is: patch applies with `-p1` at the tree root, check exits nonzero when it catches the bug.
+
+Measured from this folder; the last line of each command's output carries the numbers, e.g. `sim: RED on 1454/2000 seeds from 0, worst gap 6, 0.40s`. Worst gap is the most seeds a run starting anywhere in the range needs before it hits a catching seed.
+
+| Plant | Bug | Caught, seeds 0..1999 | Worst gap | Reproduce |
+|---|---|---|---|---|
+| `ack_before_fsync` | ack on append completion | 1454 / 2000 | 6 | `d=$(mktemp -d) && cp -a product "$d/tree" && git -C "$d/tree" apply "$PWD/plants/ack_before_fsync.patch" && python3 harness/sim.py --tree "$d/tree" --seeds 2000 --keep-going --tape-dir "$d"` |
+| `accept_mid_log_corruption` | every bad record treated as a torn tail | 1954 / 2000 | 2 | `d=$(mktemp -d) && cp -a product "$d/tree" && git -C "$d/tree" apply "$PWD/plants/accept_mid_log_corruption.patch" && python3 harness/sim.py --tree "$d/tree" --seeds 2000 --keep-going --tape-dir "$d"` |
+| `refuse_torn_tail` | a short body refused as corruption | 818 / 2000 | 14 | `d=$(mktemp -d) && cp -a product "$d/tree" && git -C "$d/tree" apply "$PWD/plants/refuse_torn_tail.patch" && python3 harness/sim.py --tree "$d/tree" --seeds 2000 --keep-going --tape-dir "$d"` |
+
+The check's budget is 200 seeds, over ten times the worst measured gap.
 
 ## Commands
 
-From `harness/`:
+From this folder; `$d` is a planted copy made as in the plant table:
 
 ```sh
-python3 -m unittest discover -s . -p 'test_*.py'
-python3 sim.py --seeds 200 --start 0 --timeout 60
-KV_PLANT=ack_before_fsync python3 sim.py --seeds 200      # red, writes tape-ack_before_fsync-seed3.json
-python3 sim.py --replay tape-ack_before_fsync-seed3.json   # same step, same message
-KV_PLANT= python3 sim.py --replay tape-ack_before_fsync-seed3.json   # same tape on the clean product: green
-python3 plant_check.py
+python3 -m unittest discover -s harness -p 'test_*.py'
+python3 harness/sim.py --seeds 200 --timeout 60                        # clean product, green
+python3 harness/sim.py --tree "$d/tree" --seeds 200 --tape-dir "$d"     # planted copy: red, writes a tape
+python3 harness/sim.py --replay "$d"/tape-*-seed3.json                   # replays on the tape's own tree: same step, same message
+python3 harness/sim.py --replay "$d"/tape-*-seed3.json --tree product   # same tape on the clean product: green
+../../scripts/plants.sh product plants                                  # every plant OK
+./gate.sh product quick                                                 # or harness, or full
 ```
 
-Replay uses the plant named in the tape unless `KV_PLANT` is set; empty means the clean tree. `--tree PATH` (or `KV_TREE`) points any of them at another product tree.
+A tape records the tree path and a digest of `kvcore.py`; replay says whether the tree it ran matches. `--tree PATH` (or `KV_TREE`) points the sim and the unit tests at another product tree.
 
-From this folder:
+## Gate tiers
 
-```sh
-./gate.sh                    # quick: unit, sim 200 seeds, plant_check
-./gate.sh path/to/tree full  # adds a 2000-seed sweep (seeds 200..2199)
-```
+`./gate.sh <tree> [quick|harness|full]`. `scripts/gate.sh` delegates here. The tree is snapshotted first, uncommitted edits included, into a fresh `mktemp -d` under `.run/tmp/`; every stage runs on the snapshot under `scripts/run.sh` with its own log. The run dir is printed on stderr and kept (logs, tapes); `scripts/clean-tmp.sh` clears them.
 
-## Measured budgets
+| Tier | Stages | Wall-clock, three runs | Stage `-t` |
+|---|---|---|---|
+| quick | unit, sim 200 seeds | 0.40 to 0.41 s | 60, 60 |
+| harness | compile (`py_compile` every harness module), plants | 0.47 to 0.50 s | 60, 240 |
+| full | quick, harness, then sweep (seeds 200..2199, heavy `-H`) | 1.45 to 1.47 s | plus 300 |
 
-This machine, 32 cores (the gate uses one), Python 3.12.3, three runs each:
+This machine, 32 cores (the gate uses one), Python 3.12.3. Per stage in one full run: unit 0.27 s, sim 0.13 s, compile 0.04 s, plants 0.32 s, sweep 0.71 s. The timeouts sit far above the budgets for a toy; in a real harness set them near the measured number, so a slow run turns red instead of eating the afternoon.
 
-| Tier | Wall-clock | Stage `timeout` |
-|---|---|---|
-| quick | 0.42 to 0.45 s | unit 60 s, sim 60 s, plant_check 120 s |
-| full | 1.12 to 1.18 s | quick plus sweep 300 s |
-
-Per stage in one full run: unit 0.09 s, sim-quick 0.11 s, plant-check 0.23 s, sim-sweep 0.74 s. The timeouts are far above the budgets on purpose for a toy; in a real harness set them near the measured number, so a slow run turns red instead of eating the afternoon.
-
-Run against each planted copy of the product, the gate goes red on all three stages and exits 1.
+Run against each planted copy of the product, `gate.sh <copy> quick` fails both stages and exits 1.

@@ -1,0 +1,15 @@
+# Acks a write on its append completion, before fsync. A crash before fsync then loses an acked write.
+# check: python3 examples/kv-python/harness/sim.py --tree "$TREE" --seeds 200 --tape-dir "$PLANT_OUT"
+# timeout: 60
+diff --git a/kvcore.py b/kvcore.py
+--- a/kvcore.py
++++ b/kvcore.py
+@@ -152,7 +152,7 @@ class KvCore:
+     def complete(self, done: Completion) -> list[int]:
+         """Returns the ops acked by this completion. An fsync covers every earlier append."""
+         if isinstance(done, AppendDone):
+-            return []
++            return self._ack_through(self._pending.get(done.op, -1))
+         return self._ack_through(self._pending.get(done.op, -1))
+ 
+     def _append(self, kind: int, key: str, value: str) -> list[Effect]:

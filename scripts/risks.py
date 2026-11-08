@@ -4,7 +4,7 @@
   scripts/risks.py            every risk, highest score first
   scripts/risks.py list       the same
   scripts/risks.py open       score 5 and up that is neither controlled nor accepted: owes a control or the human's call
-  scripts/risks.py check      exit 1 on a malformed file
+  scripts/risks.py check      exit 1 on a malformed file or an unfilled <...> skeleton placeholder
 
 Files are risks/RNNN-<slug>.md with a '# RNNN: <title>' line. RISKS_DIR overrides the folder (tests).
 check enforces AGENTS.md: score == likelihood x consequence, both 1-5, status in the enum, 12 and up controlled
@@ -21,6 +21,17 @@ DIR = pathlib.Path(os.environ.get("RISKS_DIR") or ROOT / "risks")
 STATUS = ("controlled", "accepted", "proposed", "open")
 REQUIRED = ("likelihood", "consequence", "score", "control", "status", "decision", "session", "evidence")
 DECISION_ID = re.compile(r"\bD-\d+\b")
+
+
+# A skeleton placeholder from scripts/new-id.sh left unfilled: <...> holding three or more words. Generic types such as
+# Vec<u8> or Map<K, V> hold fewer and pass.
+PLACEHOLDER = re.compile(r"<(?:[^<>\n]*\s){2,}[^<>\n]*>")
+
+
+def placeholders(path):
+    """Lines still holding a skeleton placeholder, frontmatter and body alike."""
+    return [f"line {n} still holds a skeleton placeholder: {m.group(0)}"
+            for n, line in enumerate(path.read_text().splitlines(), 1) for m in [PLACEHOLDER.search(line)] if m]
 
 
 def load(path):
@@ -75,7 +86,7 @@ def show(rs):
 
 
 def check(rs):
-    bad = [(r["path"].name, p) for r in rs for p in problems(r)]
+    bad = [(r["path"].name, p) for r in rs for p in problems(r) + placeholders(r["path"])]
     ids = [r["id"] for r in rs]
     bad += [(i, "duplicate id") for i in sorted({i for i in ids if ids.count(i) > 1})]
     for name, p in bad:

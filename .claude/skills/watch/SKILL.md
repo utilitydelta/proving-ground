@@ -18,7 +18,7 @@ The human is in a long focus session. Silence is the default; every interruption
 
 1. Monitor on `scripts/watch-wait.sh sessions/<this-session>/scratch/watch.state 90`. It exits once the human tree changed and has been quiet for 90 seconds, printing the changed paths.
 2. Compile check. Broken: go back to 1. Never hypothesise on code that does not build.
-3. **Targeted checks only**, each through `scripts/run.sh -t` (`fast-feedback` Probe and Targeted tiers): the tests `INDEX.md` maps to the changed paths, the shape diffs against the checkpoints, a few seeds or one tape when a `dst` subject is touched. Never a full tier, sweep or whole-folder mutation run per change: the human's machine is also their editor. A full tier runs once, at the human's request or at end, via `scripts/run.sh -H`. Promote new checkpoints only when the diff scripts exited 0.
+3. **Targeted checks only**, each through `scripts/run.sh -t` (`fast-feedback` Probe and Targeted tiers): the commands `scripts/affected.sh` prints for the changed paths, on the live tree, the shape diffs against the checkpoints, a few seeds or one tape when a `dst` subject is touched. Never a full tier, sweep or whole-folder mutation run per change: the human's machine is also their editor. A full tier runs once, at the human's request or at end, via `scripts/run.sh -H`. Promote new checkpoints only when the diff scripts exited 0.
 4. Check changed paths with `scripts/decisions.py trigger <module>` (revisit triggers that fired) and `scripts/decisions.py touches <path>` (provisional calls in that code). A fired trigger gets one reminder and a History line. A change that contradicts a decision is a finding against the decision: ask in the debrief which wins.
 5. Read the diff. Each hypothesis goes in `log.md` before testing: what might be wrong, what would prove it. A change that raises nothing gets no log line.
 6. Prove or kill it with the cheapest check that can. Killed: log, move on. Confirmed: `scripts/new-id.sh finding <slug> <session>`, fill it, then `triage`.
@@ -29,7 +29,7 @@ Weight toward what the human will not see while typing:
 
 - Public shape: a removed or changed public item, a lost thread-safety property. One-way-door hypotheses.
 - Formats: wire, on-disk, config. Run client suites when the wire moves.
-- Simulation shape: I/O, time, randomness or threads creeping into a core that should return effects.
+- Simulation seam, only where `## Project` declares one: I/O, time, randomness or threads crossing it.
 - Hot path: a new allocation, copy, lock or dispatch in code a bench covers. Run that bench row.
 - Invariants: a mutation path that skips a repair, a version bump, a bound.
 - Bot tests newly red: the human broke something (finding) or the test is stale (Tend, never the human).
