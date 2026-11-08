@@ -9,7 +9,8 @@
   scripts/decisions.py stats              count by decided_by and status, overturn rate per source, provisional count
   scripts/decisions.py brief <session>    one prose line per decision of that session, owner and status spelled out
   scripts/decisions.py brief <text>       the same for decisions whose touches contains <text>
-  scripts/decisions.py check              exit 1 on a malformed file or an unfilled <...> skeleton placeholder
+  scripts/decisions.py check              exit 1 on a malformed file or an unfilled skeleton placeholder
+                                          (scripts/skeleton.py)
 
 Files are decisions/NNN-<slug>.md with a '# D-NNN: <title>' line. DECISIONS_DIR overrides the folder (tests).
 Columns: id, status, decided_by, touches, title.
@@ -18,6 +19,8 @@ import os
 import pathlib
 import re
 import sys
+
+from skeleton import placeholder_problems
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DIR = pathlib.Path(os.environ.get("DECISIONS_DIR") or ROOT / "decisions")
@@ -28,15 +31,9 @@ REQUIRED = ("status", "decided_by", "touches", "revisit_when", "session")
 SESSION_TRIGGER = re.compile(r"\bsession-v?\d+\b", re.I)
 
 
-# A skeleton placeholder from scripts/new-id.sh left unfilled: <...> holding three or more words. Generic types such as
-# Vec<u8> or Map<K, V> hold fewer and pass.
-PLACEHOLDER = re.compile(r"<(?:[^<>\n]*\s){2,}[^<>\n]*>")
-
-
 def placeholders(path):
-    """Lines still holding a skeleton placeholder, frontmatter and body alike."""
-    return [f"line {n} still holds a skeleton placeholder: {m.group(0)}"
-            for n, line in enumerate(path.read_text().splitlines(), 1) for m in [PLACEHOLDER.search(line)] if m]
+    """Lines still holding a skeleton placeholder (scripts/skeleton.py), frontmatter and body alike."""
+    return placeholder_problems(path.read_text())
 
 
 def load(path):

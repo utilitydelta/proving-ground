@@ -8,4 +8,4 @@ One row per production shape. Numbers come from production or a cited source; a 
 
 | Shape | Who produces it | Mix | Sizes | Rate and burst | Data volume | Source |
 |---|---|---|---|---|---|---|
-| Example: sensor ingest | Field devices | 95% append, 5% range read | 64 to 512 B records | steady per device, bursts on reconnect | months retained | Replace with a real row, then delete this one |
+| EXAMPLE ROW: sensor ingest | Field devices | 95% append, 5% range read | 64 to 512 B records | steady per device, bursts on reconnect | months retained | Invented to show the shape; replace with a real row (`scripts/lint.py --adoption` fails while this one stays) |

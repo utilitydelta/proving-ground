@@ -1,66 +1,94 @@
 #!/usr/bin/env bash
-# The one pass/fail command over a tree. A stub for the product stages until the adopting project writes them.
+# The one pass/fail command over a product tree.
 #
 #   scripts/gate.sh <tree> [quick|harness|full]          (default tier quick)
 #
-# Contract (the stub keeps it; the real gate must too):
-# - Each stage prints one line: `OK|FAIL|BLIND <stage> <secs>s`. BLIND means the stage could not build, run or apply
-#   (run.sh 75, 126, 127, a snapshot that failed). BLIND is never OK. Exit 0 only if every stage is OK; 2 when any
-#   stage is BLIND, else 1. Stages run no-fail-fast: one red stage does not hide the next one's verdict.
-# - Tiers. quick: the targeted checks an agent runs after every change, within the quick budget INDEX.md records.
-#   harness: every harness compiles and every plant (scripts/plants.sh) applies and turns its check red. full: every
-#   tier, sweeps and proofs included; its stages run with run.sh -H.
-# - Every stage runs through scripts/run.sh with its own timeout, its own log under RUN_DIR/logs/gate-<time>-<pid>/
-#   and its own RUN_OUT.
-# - Snapshots, never the live worktree. Bot trees (this repo, lead) are copied with `git archive HEAD` into
-#   `mktemp -d "$PG_TMP/..."`: an agent editing mid-run cannot change the verdict, and uncommitted files cannot make
-#   it green. The human tree (HUMAN_REPO) is copied with its uncommitted edits (`git ls-files -co --exclude-standard`
-#   through tar), because the human gates what they are typing; the gate prints its HEAD and a dirty hash so a verdict
-#   names exactly what it judged.
-#
-# Stages here:
-# - bot-tooling: scripts/check-tooling.sh <tier> over a `git archive HEAD` copy of this repo.
-# - product: if <tree> is examples/kv-python/product, delegated to examples/kv-python/gate.sh (from the same archive
-#   copy) with the same tier. Otherwise BLIND with the message to write them. `scripts/lint.py --adoption` fails while
-#   this file still delegates to the example.
+# Contract (adopters keep it when they add stages):
+# - One line per stage: `OK|FAIL|BLIND <stage> <secs>s`, two decimals. The verdict comes from lib/verdict.sh: BLIND
+#   when the stage could not judge (heavy slot busy, timeout, cannot run, killed; exit 2 too for a stage declared
+#   with -b). Stages run no-fail-fast. Exit 0 when every stage is OK, 2 when any is BLIND, else 1.
+# - Stages: `lint` first (scripts/lint.py on this repo's working tree: registers, findings, INDEX, frozen sessions;
+#   seconds), then the product stages in the ADOPT block below. Bot tooling self-tests are not here: they are
+#   scripts/check-tooling.sh, their own gate.
+# - Tiers nest: quick < harness < full. A stage declared with tier-min runs in that tier and every higher one.
+#   quick: what an agent runs after every change, within the quick budget in INDEX.md. harness: every harness
+#   compiles and every plant (scripts/plants.sh) goes red. full: sweeps and proofs; every stage runs heavy (-H) with
+#   its timeout raised to HEAVY_TIMEOUT_MAX.
+# - Snapshots, never a live tree. Stages run from a `git archive HEAD` copy of this repo, so uncommitted harness edits
+#   cannot make the verdict green. TREE is exported as a snapshot of <tree>: the human tree (HUMAN_REPO) with its
+#   uncommitted edits (the gate prints its HEAD and a dirty hash), any other git tree at HEAD, a plain dir as is.
+#   GATE_TIER is exported too. The work dir is removed when every stage is OK and kept, with its path printed, when
+#   any is not. Logs go to RUN_DIR/logs/gate-<time>-<pid>/; scripts/clean-tmp.sh ages them out.
 set -uo pipefail
 
 # shellcheck source=lib/env.sh
 source "$(dirname "$0")/lib/env.sh"
+# shellcheck source=lib/verdict.sh
+source "$ROOT/scripts/lib/verdict.sh"
 (( $# >= 1 )) || { sed -n 4p "$0" >&2; exit 2; }
-tier=${2:-quick}
-case $tier in quick|harness|full) ;; *) echo "gate: tier must be quick, harness or full" >&2; exit 2 ;; esac
-tree=$(cd "$1" 2> /dev/null && pwd -P) || { echo "BLIND product 0s"; echo "    gate: no tree at $1"; exit 2; }
-# Shared with every nested run.sh, the copies' included, so heavy slots and temp dirs stay this machine's.
-export RUN_DIR PG_TMP
-heavy=()
-[[ $tier == full ]] && heavy=(-H)
+GATE_TIER=${2:-quick}
+case $GATE_TIER in quick|harness|full) ;; *) echo "gate: tier must be quick, harness or full" >&2; exit 2 ;; esac
+tree=$(cd "$1" 2> /dev/null && pwd -P) || { echo "BLIND snapshot 0.00s"; echo "    gate: no tree at $1"; exit 2; }
+# Shared with every nested run.sh so temp dirs stay this clone's and heavy slots this machine's.
+export RUN_DIR PG_TMP HEAVY_DIR GATE_TIER
 logs=$RUN_DIR/logs/gate-$(date +%Y%m%d-%H%M%S)-$$
 mkdir -p "$logs"
-blind=0 failed=0
+work=$(mktemp -d "$PG_TMP/gate.XXXXXX")
+blind=0 failed=0 stages=0
 
-verdict() {
-    local name=$1 code=$2 took=$3
-    case $code in
-        0) echo "OK $name ${took}s" ;;
-        75|126|127) echo "BLIND $name ${took}s"; blind=1 ;;
-        *) echo "FAIL $name ${took}s"; failed=1 ;;
+rank() { case $1 in quick) echo 1 ;; harness) echo 2 ;; full) echo 3 ;; *) echo 0 ;; esac; }
+
+# stage <name> <tier-min> [-H] [-t secs] [-b] -- <cmd...>
+#   -H heavy (scripts/run.sh -H), -t timeout (default RUN_TIMEOUT), -b exit 2 means BLIND (a build or usage failure,
+#   or a nested gate that exits 2 for BLIND). Runs <cmd> from the bot snapshot through scripts/run.sh.
+stage() {
+    local name=$1 min=$2 limit=$RUN_TIMEOUT heavy=0 usage_blind=0 began rc verdict
+    shift 2
+    (( $(rank "$min") )) || { echo "gate: stage $name: tier-min must be quick, harness or full" >&2; exit 2; }
+    while [[ ${1:-} != -- ]]; do
+        case ${1:-} in
+            -H) heavy=1; shift ;;
+            -t) limit=$2; shift 2 ;;
+            -b) usage_blind=1; shift ;;
+            *) echo "gate: stage $name: unknown flag ${1:-(none)}; usage: stage <name> <tier-min> [-H] [-t s] [-b] -- cmd" >&2
+               exit 2 ;;
+        esac
+    done
+    shift
+    (( $(rank "$GATE_TIER") >= $(rank "$min") )) || return 0
+    stages=$(( stages + 1 ))
+    if [[ $GATE_TIER == full ]]; then heavy=1; limit=$HEAVY_TIMEOUT_MAX; fi
+    local flags=(-t "$limit")
+    (( heavy )) && flags+=(-H)
+    began=$(now)
+    (cd "$work/bots" && "$ROOT/scripts/run.sh" "${flags[@]}" -l "$logs/$name.log" -- "$@") 2> "$logs/$name.run"
+    rc=$?
+    verdict=$(verdict_of "$rc" "$usage_blind")
+    echo "$verdict $name $(secs "$began" "$(now)")s"
+    case $verdict in
+        OK) return 0 ;;
+        BLIND) blind=$(( blind + 1 )) ;;
+        *) failed=$(( failed + 1 )) ;;
     esac
-    (( code == 0 )) || tail -n 20 "$logs/$name.log" 2> /dev/null | sed 's/^/    /'
+    tail -n 20 "$logs/$name.log" 2> /dev/null | sed 's/^/    /'
+    sed 's/^/    /' "$logs/$name.run"
 }
 
-# Bot tree: committed state only.
-snapshot_bot() {
-    local src=$1 dest=$2
-    git -C "$src" archive HEAD | tar -C "$dest" -xf -
-}
-
-# Human tree: tracked plus untracked-not-ignored, minus tracked files deleted in the worktree.
-snapshot_human() {
-    local src=$1 dest=$2
-    (cd "$src" && git ls-files -co --exclude-standard -z \
+# Tracked plus untracked-not-ignored, minus tracked files deleted in the worktree.
+snapshot_live() {
+    (cd "$1" && git ls-files -co --exclude-standard -z \
         | while IFS= read -r -d '' f; do [[ -e $f || -L $f ]] && printf '%s\0' "$f"; done \
-        | tar --null -T - -cf -) | tar -C "$dest" -xf -
+        | tar --null -T - -cf -) | tar -C "$2" -xf -
+}
+
+# Committed state of <src> (its subtree when <src> sits below the top of its checkout); a plain copy outside git.
+snapshot_head() {
+    local prefix
+    if prefix=$(git -C "$1" rev-parse --show-prefix 2> /dev/null); then
+        git -C "$1" archive "HEAD:$prefix" | tar -C "$2" -xf -
+    else
+        tar -C "$1" --exclude=.git -cf - . | tar -C "$2" -xf -
+    fi
 }
 
 sha256() { if command -v sha256sum > /dev/null; then sha256sum; else shasum -a 256; fi | cut -c1-16; }
@@ -77,42 +105,53 @@ dirty_hash() {
 }
 
 human=$(cd "$HUMAN_REPO" 2> /dev/null && pwd -P || true)
+mkdir -p "$work/bots" "$work/tree"
 if [[ $tree == "$human" ]]; then
     echo "gate: human tree $tree HEAD $(git -C "$tree" rev-parse --short HEAD 2> /dev/null || echo none)" \
-        "dirty $(dirty_hash "$tree" 2> /dev/null || echo unknown), tier $tier"
+        "dirty $(dirty_hash "$tree" 2> /dev/null || echo unknown), tier $GATE_TIER"
+    snapshot=snapshot_live
 else
-    echo "gate: bot tree $tree, tier $tier"
+    echo "gate: tree $tree, tier $GATE_TIER"
+    snapshot=snapshot_head
 fi
-
+began=$(now)
+if ! { git -C "$ROOT" archive HEAD | tar -C "$work/bots" -xf -; } 2> "$logs/snapshot.log" \
+    || ! $snapshot "$tree" "$work/tree" 2>> "$logs/snapshot.log"; then
+    echo "BLIND snapshot $(secs "$began" "$(now)")s"
+    sed 's/^/    /' "$logs/snapshot.log"
+    echo "gate: kept $work" >&2
+    exit 2
+fi
+export TREE=$work/tree
 # Git in a copy must never find this repo above it.
 export GIT_CEILING_DIRECTORIES=$PG_TMP
-start=$SECONDS
-bots=$(mktemp -d "$PG_TMP/gate-bots.XXXXXX")
-if snapshot_bot "$ROOT" "$bots" 2> "$logs/bot-tooling.log"; then
-    limit=120
-    [[ $tier != quick ]] && limit=300
-    (cd "$bots" && "$ROOT/scripts/run.sh" -t "$limit" ${heavy[@]+"${heavy[@]}"} -l "$logs/bot-tooling.log.run" \
-        -- bash scripts/check-tooling.sh "$tier") 2> /dev/null
-    code=$?
-    cat "$logs/bot-tooling.log.run" >> "$logs/bot-tooling.log"
-else
-    code=126
-fi
-verdict bot-tooling "$code" $(( SECONDS - start ))
 
-example=$(cd "$ROOT/examples/kv-python/product" 2> /dev/null && pwd -P || true)
-if [[ -n $example && $tree == "$example" ]]; then
-    bash "$bots/examples/kv-python/gate.sh" "$tree" "$tier"
-    case $? in 0) ;; 1) failed=1 ;; *) blind=1 ;; esac
-else
-    snap=$(mktemp -d "$PG_TMP/gate-tree.XXXXXX")
-    if [[ $tree == "$human" ]]; then snapshot_human "$tree" "$snap"; else snapshot_bot "$tree" "$snap"; fi \
-        || echo "    gate: snapshot of $tree into $snap failed"
-    echo "BLIND product 0s \"gate.sh has no stages for $tree: write them (contract above)\""
-    blind=1
+began=$(now)
+(cd "$ROOT" && python3 scripts/lint.py) > "$logs/lint.log" 2>&1
+rc=$?
+verdict=$(verdict_of "$rc")
+echo "$verdict lint $(secs "$began" "$(now)")s"
+if [[ $verdict != OK ]]; then
+    failed=$(( failed + 1 ))
+    tail -n 20 "$logs/lint.log" | sed 's/^/    /'
+fi
+
+# ADOPT: product stages below. One line per stage: stage <name> <tier-min> [-H] [-t secs] [-b] -- <cmd>. Commands run
+# from this repo's committed snapshot with TREE (the product snapshot) and GATE_TIER exported. Replace the example
+# line; scripts/lint.py --adoption fails while it stays.
+stage kv-example quick -b -- bash examples/kv-python/gate.sh "$TREE" "$GATE_TIER"
+# ADOPT: product stages above.
+
+if (( stages == 0 )); then
+    echo "BLIND product 0.00s"
+    echo "    gate: no product stage runs at tier $GATE_TIER: add them in the ADOPT block of scripts/gate.sh"
+    blind=$(( blind + 1 ))
 fi
 
 echo "gate: logs $logs" >&2
-(( blind )) && exit 2
-(( failed )) && exit 1
-exit 0
+if (( blind + failed )); then
+    echo "gate: kept $work" >&2
+else
+    drop_tmp "$work"
+fi
+gate_exit "$blind" "$failed"

@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Sourced, never run. Loads project.env into the caller's shell and resolves its paths.
 #
-#   source "$(dirname "$0")/lib/env.sh"     # sets ROOT, every KEY in project.env, RUN_DIR and PG_TMP
+#   source "$(dirname "$0")/lib/env.sh"     # sets ROOT, every KEY in project.env, RUN_DIR, PG_TMP and HEAVY_DIR
 #
 # A variable already set in the environment wins over project.env, so a test or a one-off run can point
 # HUMAN_REPO or FACTORY_READ_ONLY elsewhere without editing the file. HUMAN_REPO and LEAD_REPO come back
@@ -28,6 +28,10 @@ load_project_env() {
     done
     RUN_TIMEOUT=${RUN_TIMEOUT:-300}
     HEAVY_JOBS=${HEAVY_JOBS:-1}
+    HEAVY_TIMEOUT_MAX=${HEAVY_TIMEOUT_MAX:-3600}
+    # Heavy slots are per machine, not per clone: two clones of this template (or two adopting projects) on one box
+    # share the CPU, so they share the slots. Tests point it at a temp dir.
+    HEAVY_DIR=${HEAVY_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/proving-ground/heavy}
     # Per-machine runtime state: heavy slots, run logs, build output. Tests point it at a temp dir.
     RUN_DIR=${RUN_DIR:-$ROOT/.run}
     # Root for every temp dir the scripts make (gate and plant snapshots): `mktemp -d "$PG_TMP/x.XXXXXX"`. Under

@@ -6,20 +6,20 @@ Append-only history. One folder per session, `session-vN-<mode>-<slug>/`, made b
 
 | File | Holds |
 |---|---|
-| `goal.md` | `## Ask`, `## Acceptance` (empirical checks: red today, green when done), `## Delta` against existing coverage, `## Builds on` (provisional decisions the work rests on, from `scripts/decisions.py touches`) |
+| `goal.md` | `## Ask`, `## Weight` (the `AGENTS.md` Weight row and one clause of why), `## Acceptance` (empirical checks: red today, green when done), `## Delta` against existing coverage, `## Builds on` (provisional decisions the work rests on, from `scripts/decisions.py touches`) |
 | `log.md` | Timestamped, append-only: hypotheses, proofs, kills, decisions taken. Not a narration of edits |
 | `human.md` | The human's statements of intent, verbatim, one line each. Not questions, chat or answers to agents |
 | `report.md` | What the human reads. Short |
 | `scraps.md` | Every hole, defer and leftover review item, one line each with its owner |
 | `findings/NNN-<slug>.md` | One per confirmed finding |
 | `briefs/`, `reviews/` | Every subagent brief and review, as files |
-| `scratch/` | Gitignored. Anything worth keeping moves to `harness/`, `scripts/` or lead before the session ends |
+| `scratch/` | Gitignored. Evidence the agent keeps: cited tapes, an edited copy of human code. Run output lives in `.run/`, not here. Anything worth keeping in git moves to `harness/`, `scripts/` or lead before the session ends |
 
 Task and Factory sessions that build in lead add `units/<id>.md`. Factory adds `session-state.md`, `progress.md` and `jobs/`.
 
 ## Findings
 
-`scripts/new-id.sh finding <slug> <session-dir>` writes the skeleton.
+`scripts/new-id.sh finding <slug> <session-dir>` writes the skeleton; `scripts/findings.py check` lints every finding and `stats` counts them by class and status for `INDEX.md`.
 
 ```markdown
 ---

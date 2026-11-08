@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Self-test for the register and scaffolding scripts, run in temp dirs: decisions.py, risks.py, new-id.sh,
-new-session.sh, lint.py (default and --adoption), affected.sh.
+"""Self-test for the register and scaffolding scripts, run in temp dirs: decisions.py, risks.py, findings.py,
+skeleton.py, new-id.sh, new-session.sh, lint.py (default and --adoption), affected.sh, changed-tooling.sh.
 
   python3 scripts/test_ledgers.py
 """
@@ -31,7 +31,7 @@ GOOD_RISK = """---
 likelihood: {lik}
 consequence: {con}
 score: {score}
-control: none
+control: {control}
 status: {status}
 decision: {decision}
 session: session-v1
@@ -45,9 +45,23 @@ def decision(num="001", status="decided", by="bot", when="the read path lands", 
     return GOOD_DECISION.format(num=num, status=status, by=by, when=when, extra=extra)
 
 
-def risk(num="001", lik=2, con=2, score=None, status="open", decision="none"):
+def risk(num="001", lik=2, con=2, score=None, status="open", decision="none", control="none"):
     return GOOD_RISK.format(num=num, lik=lik, con=con, score=lik * con if score is None else score,
-                            status=status, decision=decision)
+                            status=status, decision=decision, control=control)
+
+
+GOOD_FINDING = """---
+class: {cls}
+status: {status}
+touches: store::put
+evidence: {evidence}
+{extra}---
+Claim.
+"""
+
+
+def finding(cls="regression", status="open", evidence="scripts/run.sh -- python3 harness/sim.py --seed 3", extra=""):
+    return GOOD_FINDING.format(cls=cls, status=status, evidence=evidence, extra=extra)
 
 
 class Registers(unittest.TestCase):
@@ -55,9 +69,11 @@ class Registers(unittest.TestCase):
         self.tmp = pathlib.Path(tempfile.mkdtemp())
         self.decisions = self.tmp / "decisions"
         self.risks = self.tmp / "risks"
+        self.sessions = self.tmp / "sessions"
         self.decisions.mkdir()
         self.risks.mkdir()
-        self.env = dict(os.environ, DECISIONS_DIR=str(self.decisions), RISKS_DIR=str(self.risks))
+        self.env = dict(os.environ, DECISIONS_DIR=str(self.decisions), RISKS_DIR=str(self.risks),
+                        SESSIONS_DIR=str(self.sessions))
 
     def tearDown(self):
         shutil.rmtree(self.tmp)
@@ -95,12 +111,16 @@ class Registers(unittest.TestCase):
         self.assert_decision_problem(decision(when="session-v9"), "revisit_when names a session")
         self.assert_decision_problem(decision(num="007"), "does not match file name")
         self.assert_decision_problem("# D-001: no frontmatter\n", "no --- frontmatter")
-        self.assert_decision_problem(decision().replace("store::put", "<path::Symbol in the human repo>"),
-                                     "line 4 still holds a skeleton placeholder")
-        self.assert_decision_problem(decision() + "<Why, in a sentence or two.>\n", "skeleton placeholder")
+        self.assert_decision_problem(
+            decision().replace("store::put", "<path::Symbol in the human repo, lead or a harness>"),
+            "line 4 still holds a skeleton placeholder")
+        self.assert_decision_problem(
+            decision() + "<Why, in a sentence or two. Alternatives and why not. Evidence: command or file.>\n",
+            "skeleton placeholder")
 
     def test_decisions_generic_types_are_not_placeholders(self):
-        self.write(self.decisions, "001-x.md", decision() + "Keeps a Vec<u8> and a Map<K, V> per shard.\n")
+        self.write(self.decisions, "001-x.md", decision() + "Keeps a Vec<u8> and a Map<K, V> per shard, run as "
+                   "<tool> <the event that reopens it now>.\nQuoted: `<the event that reopens it>` stays prose.\n")
         out = self.run_script("decisions.py", "check")
         self.assertEqual(out.returncode, 0, out.stdout)
 
@@ -133,22 +153,79 @@ class Registers(unittest.TestCase):
         for cmd in ([], ["open"], ["check"]):
             self.assertEqual(self.run_script("risks.py", *cmd).returncode, 0, cmd)
 
+    def assert_risk_ok(self, text, why=""):
+        self.write(self.risks, "R001-x.md", text)
+        out = self.run_script("risks.py", "check")
+        self.assertEqual(out.returncode, 0, why + out.stdout)
+
     def test_risks_check_rules(self):
-        self.write(self.risks, "R001-x.md", risk(lik=4, con=4, status="controlled"))
-        self.assertEqual(self.run_script("risks.py", "check").returncode, 0)
-        self.write(self.risks, "R001-x.md", risk(lik=4, con=4, status="proposed", decision="D-003"))
-        self.assertEqual(self.run_script("risks.py", "check").returncode, 0)
+        self.write(self.decisions, "003-made.md", decision("003", "decided", "human-asked"))
+        self.write(self.decisions, "004-open.md", decision("004", "open", "none"))
+        self.write(self.decisions, "005-nobody.md", decision("005", "deferred", "none"))
         self.assert_risk_problem(risk(lik=2, con=3, score=5), "score '5' is not 2 x 3 = 6")
         self.assert_risk_problem(risk(lik=6, con=1), "likelihood '6' not 1-5")
         self.assert_risk_problem(risk(status="parked"), "status 'parked'")
-        self.assert_risk_problem(risk(lik=3, con=4, status="open"), "score 12 needs a control")
-        self.assert_risk_problem(risk(lik=2, con=3, status="accepted"), "accepted at score 6 without the decision")
-        self.write(self.risks, "R001-x.md", risk(lik=2, con=3, status="accepted", decision="D-004"))
-        self.assertEqual(self.run_script("risks.py", "check").returncode, 0)
-        self.write(self.risks, "R001-x.md", risk(lik=2, con=2, status="accepted"))
-        self.assertEqual(self.run_script("risks.py", "check").returncode, 0, "4 and under accepts without a decision")
-        self.assert_risk_problem(risk().replace("harness/sim --seed 1", "<command, test or tape that shows it>"),
+        # open and proposed are the queue: any score passes.
+        self.assert_risk_ok(risk(lik=5, con=5, status="open"), "open at 25: ")
+        self.assert_risk_ok(risk(lik=4, con=4, status="proposed"), "proposed at 16: ")
+        # 12 and up, controlled or accepted: a control and an existing decision.
+        self.assert_risk_problem(risk(lik=4, con=4, status="controlled", decision="D-003"), "with control: none")
+        self.assert_risk_problem(risk(lik=4, con=4, status="accepted", decision="D-003"), "with control: none")
+        self.assert_risk_problem(risk(lik=4, con=4, status="controlled", control="crc on read"),
+                                 "must cite an existing decision")
+        self.assert_risk_problem(risk(lik=4, con=4, status="controlled", control="crc on read", decision="D-009"),
+                                 "must cite an existing decision")
+        self.assert_risk_ok(risk(lik=4, con=4, status="controlled", control="crc on read", decision="D-004"),
+                            "controlled at 16 citing an open decision that exists: ")
+        # 5 to 11 accepted: the decision exists and has been made.
+        self.assert_risk_problem(risk(lik=2, con=3, status="accepted"), "accepted at score 6 must cite")
+        self.assert_risk_problem(risk(lik=2, con=3, status="accepted", decision="D-009"), "accepted at score 6 must cite")
+        self.assert_risk_problem(risk(lik=2, con=3, status="accepted", decision="D-004"), "accepted at score 6 must cite")
+        self.assert_risk_problem(risk(lik=2, con=3, status="accepted", decision="D-005"), "accepted at score 6 must cite")
+        self.assert_risk_ok(risk(lik=2, con=3, status="accepted", decision="D-003"))
+        self.assert_risk_ok(risk(lik=2, con=2, status="accepted"), "4 and under accepts without a decision: ")
+        self.assert_risk_problem(risk().replace("harness/sim --seed 1", "<command, test or tape that shows the scenario>"),
                                  "skeleton placeholder")
+        self.assert_risk_ok(risk().replace("harness/sim --seed 1", "`<command, test or tape that shows the scenario>`"),
+                            "backticked placeholder text is prose: ")
+
+    def write_finding(self, name, text, session="session-v1-task-a"):
+        folder = self.sessions / session / "findings"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_text(text)
+
+    def assert_finding_problem(self, text, expected):
+        self.write_finding("001-x.md", text)
+        out = self.run_script("findings.py", "check")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn(expected, out.stdout)
+
+    def test_findings_check(self):
+        self.assertEqual(self.run_script("findings.py", "check").returncode, 0)
+        self.write_finding("001-x.md", finding())
+        self.write_finding("002-y.md", finding("one-way-door", "adopted", extra="adopted_in: abc123\n"))
+        out = self.run_script("findings.py", "check")
+        self.assertEqual(out.returncode, 0, out.stdout)
+        self.assert_finding_problem(finding(cls="bug"), "class 'bug' not one of")
+        self.assert_finding_problem(finding(status="fixed"), "status 'fixed' not one of")
+        self.assert_finding_problem(finding(evidence=""), "missing evidence")
+        self.assert_finding_problem(finding(extra="adopted_in: abc\n"), "adopted_in on a finding with status 'open'")
+        self.assert_finding_problem("Claim only.\n", "no --- frontmatter")
+        self.assert_finding_problem(finding(evidence="<one command that reproduces it from this repo>"),
+                                    "skeleton placeholder")
+        skeleton = subprocess.run([sys.executable, str(SCRIPTS / "skeleton.py"), "render", "finding", "001", "x",
+                                   "session-v1", "2026-01-01"], capture_output=True, text=True).stdout
+        self.assert_finding_problem(skeleton, "skeleton placeholder")
+
+    def test_findings_stats_rows(self):
+        self.write_finding("001-a.md", finding("regression", "open"))
+        self.write_finding("002-b.md", finding("regression", "adopted"))
+        self.write_finding("001-c.md", finding("time-sink", "noise"), session="session-v2-task-b")
+        rows = self.run_script("findings.py", "stats").stdout.splitlines()
+        self.assertEqual(rows[0], "| Class | Open | Adopted | Rejected | Noise |")
+        self.assertIn("| regression | 1 | 1 | 0 | 0 |", rows)
+        self.assertIn("| time-sink | 0 | 0 | 0 | 1 |", rows)
+        self.assertIn("| one-way-door | 0 | 0 | 0 | 0 |", rows)
 
     def test_risks_list_by_score_and_open(self):
         self.write(self.risks, "R001-low.md", risk("001", 1, 2))
@@ -222,7 +299,7 @@ class Scaffolding(unittest.TestCase):
         for name in ("findings", "briefs", "reviews", "scratch", "units", "jobs/pending", "jobs/running", "jobs/done"):
             self.assertTrue((folder / name).is_dir(), name)
         goal = (folder / "goal.md").read_text()
-        for heading in ("## Ask", "## Acceptance", "## Delta", "## Builds on"):
+        for heading in ("## Ask", "## Acceptance", "## Delta", "## Weight", "## Builds on"):
             self.assertIn(heading + "\n", goal)
         self.assertIn("WARNING: HUMAN_REPO", out.stderr)
         state = (folder / "session-state.md").read_text()
@@ -275,7 +352,7 @@ class Scaffolding(unittest.TestCase):
             (folder / "findings").mkdir(parents=True)
             (folder / "units").mkdir()
             (folder / "report.md").write_text("# Report\n")
-            (folder / "findings" / "001-x.md").write_text("---\nclass: regression\nstatus: open\n---\nClaim.\n")
+            (folder / "findings" / "001-x.md").write_text(finding())
             (folder / "units" / "u1.md").write_text("## Contract\nc\n\n## Changed by\n- first\n")
         (self.root / "INDEX.md").write_text("# Index\n\n## Sessions\n\nsession-v1-task-done: built x\n")
         self.git("init", "-q")
@@ -284,8 +361,7 @@ class Scaffolding(unittest.TestCase):
         self.assertEqual(subprocess.run(lint, capture_output=True).returncode, 0)
         # Allowed after finish: a finding's status and adopted_in, a unit's ## Changed by.
         for folder in (done, live):
-            (folder / "findings" / "001-x.md").write_text(
-                "---\nclass: regression\nstatus: adopted\nadopted_in: abc123\n---\nClaim.\n")
+            (folder / "findings" / "001-x.md").write_text(finding(status="adopted", extra="adopted_in: abc123\n"))
             (folder / "units" / "u1.md").write_text("## Contract\nc\n\n## Changed by\n- first\n- second\n")
         out = subprocess.run(lint, capture_output=True, text=True)
         self.assertEqual(out.returncode, 0, out.stderr)
@@ -295,35 +371,119 @@ class Scaffolding(unittest.TestCase):
             (folder / "units" / "u1.md").write_text("## Contract\nchanged\n\n## Changed by\n- first\n- second\n")
             (folder / "extra.md").write_text("late\n")
             (folder / "findings" / "001-x.md").write_text(
-                "---\nclass: one-way-door\nstatus: adopted\nadopted_in: abc123\n---\nClaim, reworded.\n")
+                finding("one-way-door", "adopted", extra="adopted_in: abc123\n").replace("Claim.", "Reworded."))
         out = subprocess.run(lint, capture_output=True, text=True)
         self.assertEqual(out.returncode, 1)
         for name in ("report.md", "units/u1.md", "extra.md", "findings/001-x.md"):
             self.assertIn(f"sessions/session-v1-task-done/{name}:", out.stderr)
         self.assertNotIn("session-v2-task-live", out.stderr)
+        # Committed past the hook (--no-verify): still caught, since the diff runs from the INDEX commit.
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "late", "--no-verify")
+        out = subprocess.run(lint, capture_output=True, text=True)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("sessions/session-v1-task-done/report.md:", out.stderr)
+        # A session finished later is judged from its own INDEX commit: earlier edits to it are history.
+        (self.root / "INDEX.md").write_text("# Index\n\n## Sessions\n\nsession-v1-task-done: built x\n"
+                                            "session-v2-task-live: built y\n")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "finish v2")
+        out = subprocess.run(lint, capture_output=True, text=True)
+        self.assertNotIn("session-v2-task-live", out.stderr)
+        (live / "report.md").write_text("# Report\nafter finish\n")
+        self.assertIn("sessions/session-v2-task-live/report.md:", subprocess.run(lint, capture_output=True,
+                                                                                text=True).stderr)
+
+    def test_lint_frozen_skips_out_of_git_with_a_line(self):
+        out = subprocess.run([sys.executable, str(self.root / "scripts" / "lint.py")], capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("SKIP frozen sessions", out.stderr)
+
+    def test_lint_coverage_and_plants(self):
+        lint = [sys.executable, str(self.root / "scripts" / "lint.py")]
+        plants = self.root / "harness" / "py" / "plants"
+        plants.mkdir(parents=True)
+        (plants / "good.patch").write_text("# Breaks x.\n# check: false\ndiff --git a/x b/x\n")
+        rows = ["glob\tcommand\ttier\tbudget_s\tplant",
+                "# commented\tanything\tnope\tx\tmissing.patch",
+                "src/*.py\tpython3 t.py --tree \"$TREE\"\ttargeted\t20\tharness/py/plants/good.patch",
+                "src/*.py\tpython3 u.py\tquick\t1.5\t"]
+        (self.root / "harness" / "coverage.tsv").write_text("\n".join(rows) + "\n")
+        out = subprocess.run(lint, capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        rows += ["src/*.py\tpython3 v.py\tslow\tabout 20\tharness/py/plants/gone.patch", "too\tfew"]
+        (self.root / "harness" / "coverage.tsv").write_text("\n".join(rows) + "\n")
+        (plants / "nocheck.patch").write_text("# Breaks y.\ndiff --git a/y b/y\n# check: after the diff\n")
+        out = subprocess.run(lint, capture_output=True, text=True)
+        self.assertEqual(out.returncode, 1)
+        for expected in ("coverage.tsv:5: tier 'slow'", "coverage.tsv:5: budget_s 'about 20'",
+                         "coverage.tsv:5: plant 'harness/py/plants/gone.patch'", "coverage.tsv:6: 2 columns",
+                         "harness/py/plants/nocheck.patch: no '# check: <command>' line"):
+            self.assertIn(expected, out.stderr)
+        self.assertNotIn("coverage.tsv:2", out.stderr)
+        self.assertNotIn("good.patch", out.stderr)
+
+    def test_changed_tooling(self):
+        script = [str(self.root / "scripts" / "changed-tooling.sh")]
+        (self.root / "docs").mkdir()
+        (self.root / "docs" / "a.md").write_text("a\n")
+        (self.root / "project.env").write_text("HUMAN_REPO=../product\n")
+        self.git("init", "-q")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+        self.assertEqual(subprocess.run([*script, "HEAD"], capture_output=True).returncode, 1)
+        (self.root / "docs" / "a.md").write_text("b\n")
+        self.assertEqual(subprocess.run([*script, "HEAD"], capture_output=True).returncode, 1, "docs are not tooling")
+        (self.root / ".claude").mkdir()
+        (self.root / ".claude" / "settings.json").write_text("{}\n")
+        out = subprocess.run([*script, "HEAD"], capture_output=True, text=True)
+        self.assertEqual((out.returncode, out.stdout), (0, ".claude/settings.json\n"))
+        self.assertEqual(subprocess.run([*script, "nope"], capture_output=True).returncode, 2)
 
     def test_lint_adoption(self):
         lint = [sys.executable, str(self.root / "scripts" / "lint.py"), "--adoption"]
         (self.root / "AGENTS.md").write_text("# Rules\n\n## Project\n\n- **Human repo:** `<path>`.\n"
-                                             "- **Workload shapes (optional):** docs/workload-shapes.md\n\n## Next\n<x y z>\n")
+                                             "- **Workload shapes (optional):** <docs/workload-shapes.md, or none>\n"
+                                             "\n## Next\n<x y z>\n")
         (self.root / "examples" / "kv").mkdir(parents=True)
-        (self.root / "project.env").write_text("HUMAN_REPO=examples/kv\n")
+        (self.root / "project.env").write_text("HUMAN_REPO=examples/kv\nTEMPLATE_ORIGIN=owner/template\n")
+        docs = self.root / "docs"
+        docs.mkdir()
+        (docs / "workload-shapes.md").write_text("| Shape |\n|---|\n| EXAMPLE ROW: ingest |\n")
+        (docs / "ARCHITECTURE.md").write_text("| Subsystem | Location | State |\n|---|---|---|\n"
+                                              "| Gate | `scripts/gate.sh <tree> [quick\\|full]` | Stub: example only |\n")
+        self.git("init", "-q")
+        self.git("remote", "add", "origin", "git@github.com:owner/template.git")
         out = subprocess.run(lint, capture_output=True, text=True, env=self.env)
         self.assertEqual(out.returncode, 1)
-        for expected in ("HUMAN_REPO still points into examples/", "AGENTS.md:5: ## Project still holds a placeholder",
-                         "docs/workload-shapes.md missing", "gate.sh still delegates"):
+        for expected in ("HUMAN_REPO still points into examples/", "AGENTS.md:5: ## Project still holds template text",
+                         "AGENTS.md:6: ## Project still holds template text",
+                         "docs/workload-shapes.md still holds its EXAMPLE ROW marker",
+                         "docs/ARCHITECTURE.md:3: Gate row still says Stub", "scripts/gate.sh:",
+                         "git origin git@github.com:owner/template.git is the template"):
             self.assertIn(expected, out.stderr)
         self.assertNotIn("AGENTS.md:10", out.stderr)
         human = self.root / "product"
         human.mkdir()
-        (self.root / "project.env").write_text("HUMAN_REPO=product\n")
+        self.git("remote", "set-url", "origin", "git@github.com:owner/template-fork.git")
+        (self.root / "project.env").write_text("HUMAN_REPO=product\nTEMPLATE_ORIGIN=owner/template\n")
         (self.root / "AGENTS.md").write_text("# Rules\n\n## Project\n\n- **Human repo:** `../product`.\n"
-                                             "- **Workload shapes:** none\n")
-        (self.root / "scripts" / "gate.sh").write_text("#!/usr/bin/env bash\necho OK product 0s\n")
+                                             "- **Workload shapes:** docs/workload-shapes.md\n")
+        (docs / "workload-shapes.md").write_text("| Shape |\n|---|\n| Ingest |\n")
+        (docs / "ARCHITECTURE.md").write_text("| Gate | `scripts/gate.sh` | Working: unit, sim |\n")
+        gate = self.root / "scripts" / "gate.sh"
+        gate.write_text("#!/usr/bin/env bash\n# was: stage kv-example quick -- examples/kv-python/gate.sh\n"
+                        "stage unit quick -- python3 harness/t.py --tree \"$TREE\"\n")
         out = subprocess.run(lint, capture_output=True, text=True, env=self.env)
         self.assertEqual(out.returncode, 0, out.stderr)
-        # The template's own lint never runs the adoption checks.
-        self.assertEqual(subprocess.run(lint[:-1], capture_output=True, env=self.env).returncode, 0)
+        gate.write_text(gate.read_text() + "  stage kv quick -- bash examples/kv-python/gate.sh\n")
+        self.assertIn("scripts/gate.sh:4:", subprocess.run(lint, capture_output=True, text=True, env=self.env).stderr)
+        # Workload shapes: none, said plainly, needs no file.
+        (docs / "workload-shapes.md").unlink()
+        (self.root / "AGENTS.md").write_text("## Project\n\n- **Workload shapes:** none\n")
+        gate.write_text("#!/usr/bin/env bash\n")
+        out = subprocess.run(lint, capture_output=True, text=True, env=self.env)
+        self.assertEqual(out.returncode, 0, out.stderr)
 
 
 class Affected(unittest.TestCase):
@@ -359,6 +519,23 @@ class Affected(unittest.TestCase):
         return subprocess.run([str(self.root / "scripts" / "affected.sh"), *args], capture_output=True, text=True,
                               env=self.env)
 
+    def printed(self, *commands):
+        return [f"TREE={self.human} bash -c {c}" for c in commands]
+
+    def test_run_executes_with_tree_and_reports_verdicts(self):
+        rows = ["glob\tcommand\ttier\tbudget_s\tplant",
+                "src/*.py\ttest -f \"$TREE/src/net.py\"\ttargeted\t1\t",
+                "src/*.py\tfalse\tquick\t1\t"]
+        (self.root / "harness" / "coverage.tsv").write_text("\n".join(rows) + "\n")
+        (self.human / "src" / "net.py").write_text("changed\n")
+        out = self.affected()
+        self.assertEqual(out.stdout.splitlines()[0], f"TREE={self.human} bash -c " + "test\\ -f\\ \\\"\\$TREE/src/net.py\\\"")
+        out = self.affected("--run")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        lines = out.stdout.splitlines()
+        self.assertRegex(lines[0], r'^OK \d+\.\d\ds test -f "\$TREE/src/net.py"$')
+        self.assertRegex(lines[1], r"^FAIL \d+\.\d\ds false$")
+
     def test_nothing_changed(self):
         out = self.affected()
         self.assertEqual((out.returncode, out.stdout), (0, ""))
@@ -367,11 +544,11 @@ class Affected(unittest.TestCase):
     def test_uncommitted_change_targeted_first_deduped(self):
         (self.human / "src" / "store" / "log.py").write_text("y\n")
         out = self.affected()
-        self.assertEqual(out.stdout.splitlines(), ["store-test", "store-quick", "full-suite"], out.stderr)
+        self.assertEqual(out.stdout.splitlines(), self.printed("store-test", "store-quick", "full-suite"), out.stderr)
 
     def test_untracked_file_and_single_segment_star(self):
         (self.human / "src" / "dns.py").write_text("new\n")
-        self.assertEqual(self.affected().stdout.splitlines(), ["net-test", "full-suite"])
+        self.assertEqual(self.affected().stdout.splitlines(), self.printed("net-test", "full-suite"))
 
     def test_since_base_ref_and_no_match(self):
         (self.human / "README.md").write_text("y\n")

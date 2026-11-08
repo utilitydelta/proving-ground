@@ -9,16 +9,21 @@ Checks:
   - INDEX.md: session lines (in `## Sessions`, naming a session-vN-...) over 150 characters, any other line over 400
   - .claude/skills/*/SKILL.md over 120 lines or 12 KB (a skill that long gets skimmed; detail goes in references/)
   - untracked files loose at the repo root, outside ROOT_ALLOWED
-  - sessions/*/scratch over SCRATCH_BUDGET from project.env (summed in Python: no du, so it runs on macOS too)
-  - scripts/decisions.py check and scripts/risks.py check
-  - frozen sessions: a session whose line is in HEAD's INDEX `## Sessions` has been through `finish`. Against HEAD
-    (staged and unstaged, untracked included) it may change only `status:` and `adopted_in:` lines in findings/*.md
-    and lines inside a `## Changed by` section of units/*.md. Best effort: judged line by line on a -U0 diff, so a
-    hand-crafted change can pass; skipped outside a git checkout of this repo.
+  - sessions/*/scratch plus .run/ over SCRATCH_BUDGET from project.env (summed in Python: no du, so it runs on macOS)
+  - scripts/decisions.py check, scripts/risks.py check and scripts/findings.py check
+  - harness/coverage.tsv: every row has a known tier, a numeric budget_s, and a plant column that is empty or an
+    existing patch path; every harness/**/plants/*.patch and examples/*/plants/*.patch has a `# check:` line
+  - frozen sessions: a session whose line is in HEAD's INDEX `## Sessions` has been through `finish`. From the commit
+    that added its INDEX line to the working tree (later commits, staged, unstaged and untracked alike, so a
+    `--no-verify` commit is caught at the next lint) it may change only `status:` and `adopted_in:` lines in
+    findings/*.md and lines inside a `## Changed by` section of units/*.md. Best effort: judged line by line on a
+    -U0 diff, so a hand-crafted change can pass. Outside a git checkout of this repo (a `git archive` copy) it prints
+    a SKIP line on stderr.
 
-Adoption (--adoption): HUMAN_REPO exists and no longer points into examples/; AGENTS.md `## Project` holds no
-<...> placeholder; docs/workload-shapes.md exists or the Workload shapes line says none; scripts/gate.sh no longer
-delegates to the example.
+Adoption (--adoption): HUMAN_REPO exists and no longer points into examples/; every AGENTS.md `## Project` line is
+filled (no <...> placeholder); docs/workload-shapes.md exists without its EXAMPLE ROW marker, or the Workload shapes
+line says none; docs/ARCHITECTURE.md's Gate row no longer says Stub; no non-comment line of scripts/gate.sh mentions
+examples/kv-python; `git remote get-url origin` is not TEMPLATE_ORIGIN (project.env).
 
 PROJECT_ROOT overrides the repo root (tests).
 """
@@ -38,6 +43,8 @@ ROOT_ALLOWED = {"README.md", "AGENTS.md", "CLAUDE.md", "INDEX.md", "project.env"
 UNITS = {"": 1, "K": 1 << 10, "M": 1 << 20, "G": 1 << 30, "T": 1 << 40}
 SESSION_NAME = re.compile(r"session-v\d+-[a-z]+-[a-z0-9-]*[a-z0-9]")
 PLACEHOLDER = re.compile(r"<[^<>\n]+>")
+TIERS = ("probe", "targeted", "quick", "harness", "full")
+EXAMPLE_MARKER = "EXAMPLE ROW"
 
 
 def project_env(root):
@@ -133,19 +140,53 @@ def scratch(root, env):
     budget = size_bytes(env.get("SCRATCH_BUDGET", ""))
     if budget is None:
         return []
-    total = sum(tree_bytes(p) for p in (root / "sessions").glob("*/scratch") if p.is_dir())
+    dirs = [p for p in (root / "sessions").glob("*/scratch") if p.is_dir()]
+    dirs += [root / ".run"] if (root / ".run").is_dir() else []
+    total = sum(tree_bytes(p) for p in dirs)
     if total <= budget:
         return []
-    return [f"sessions/*/scratch holds {total >> 20} MB, over SCRATCH_BUDGET {env['SCRATCH_BUDGET']}; Tend clears it"]
+    return [f"sessions/*/scratch and .run/ hold {total >> 20} MB, over SCRATCH_BUDGET {env['SCRATCH_BUDGET']}; Tend "
+            "clears session scratch, scripts/clean-tmp.sh clears .run"]
 
 
 def registers(root):
     out = []
-    env = dict(os.environ, DECISIONS_DIR=str(root / "decisions"), RISKS_DIR=str(root / "risks"))
-    for script in ("decisions.py", "risks.py"):
+    env = dict(os.environ, DECISIONS_DIR=str(root / "decisions"), RISKS_DIR=str(root / "risks"),
+               SESSIONS_DIR=str(root / "sessions"))
+    for script in ("decisions.py", "risks.py", "findings.py"):
         run = subprocess.run([sys.executable, str(SCRIPTS / script), "check"], capture_output=True, text=True, env=env)
         if run.returncode:
             out += [f"{script} check: {line}" for line in run.stdout.splitlines()[:-1]]
+    return out
+
+
+def coverage(root):
+    out = []
+    table = root / "harness" / "coverage.tsv"
+    lines = table.read_text().splitlines() if table.is_file() else []
+    for n, line in enumerate(lines, 1):
+        if n == 1 or not line.strip() or line.startswith("#"):
+            continue
+        cols = line.split("\t")
+        if len(cols) != 5:
+            out.append(f"harness/coverage.tsv:{n}: {len(cols)} columns, expected glob, command, tier, budget_s, plant")
+            continue
+        _glob, _command, tier, budget, plant = cols
+        if tier not in TIERS:
+            out.append(f"harness/coverage.tsv:{n}: tier {tier!r} not one of {', '.join(TIERS)}")
+        if not re.fullmatch(r"\d+(\.\d+)?", budget.strip()):
+            out.append(f"harness/coverage.tsv:{n}: budget_s {budget!r} is not a measured number of seconds")
+        if plant.strip() and not (plant.strip().endswith(".patch") and (root / plant.strip()).is_file()):
+            out.append(f"harness/coverage.tsv:{n}: plant {plant!r} is not an existing .patch path")
+    patches = sorted(root.glob("harness/**/plants/*.patch")) + sorted(root.glob("examples/*/plants/*.patch"))
+    for patch in patches:
+        head = []
+        for line in patch.read_text().splitlines():
+            if line.startswith(("diff ", "--- ", "Index: ")):
+                break
+            head.append(line)
+        if not any(line.startswith("# check: ") and line[9:].strip() for line in head):
+            out.append(f"{patch.relative_to(root)}: no '# check: <command>' line before the diff")
     return out
 
 
@@ -171,41 +212,55 @@ def allowed_change(rel, line_no, text_lines, headings):
 def frozen_sessions(root):
     head_index = git(root, "show", "HEAD:INDEX.md")
     if head_index is None:
+        print("lint: SKIP frozen sessions: not a git checkout of this repo with a committed INDEX.md", file=sys.stderr)
         return []
     frozen = {m.group(0) for _n, line in section(head_index.splitlines(), "## Sessions")
               for m in SESSION_NAME.finditer(line)}
-    if not frozen:
-        return []
-    changed = (git(root, "diff", "HEAD", "--name-only", "--", "sessions") or "").splitlines()
-    untracked = (git(root, "ls-files", "--others", "--exclude-standard", "--", "sessions") or "").splitlines()
+    out = []
+    for name in sorted(frozen):
+        added = (git(root, "log", "--format=%H", "--reverse", f"-S{name}", "--", "INDEX.md") or "").split()
+        if not added:
+            continue
+        out += frozen_changes(root, name, added[0])
+    return out
+
+
+def frozen_changes(root, name, base):
+    """Changes to sessions/<name> since commit <base>, committed or not, that a finished session may not take."""
+    folder = f"sessions/{name}"
+    changed = (git(root, "diff", base, "--name-only", "--", folder) or "").splitlines()
+    untracked = (git(root, "ls-files", "--others", "--exclude-standard", "--", folder) or "").splitlines()
     out = []
     for rel in sorted(set(changed + untracked)):
-        parts = rel.split("/")
-        if len(parts) < 3 or parts[1] not in frozen:
-            continue
-        if rel in untracked:
-            out.append(f"{rel}: new file in finished session {parts[1]}; sessions are frozen after finish")
-            continue
-        diff = git(root, "diff", "HEAD", "-U0", "--", rel) or ""
-        old = git(root, "show", f"HEAD:{rel}")
+        old = git(root, "show", f"{base}:{rel}")
         new_path = root / rel
-        if old is None or not new_path.is_file():
-            out.append(f"{rel}: deleted or replaced in finished session {parts[1]}")
+        if old is None:
+            out.append(f"{rel}: new file in finished session {name}; sessions are frozen after finish")
             continue
+        if not new_path.is_file():
+            out.append(f"{rel}: deleted or replaced in finished session {name}")
+            continue
+        diff = git(root, "diff", base, "-U0", "--", rel) or ""
         new = new_path.read_text()
         olds, news = old.splitlines(), new.splitlines()
         old_heads, new_heads = headings_by_line(old), headings_by_line(new)
-        bad = False
         for m in re.finditer(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", diff, re.M):
             o, oc, nw, nc = int(m.group(1)), int(m.group(2) or 1), int(m.group(3)), int(m.group(4) or 1)
             if any(not allowed_change(rel, k, olds, old_heads) for k in range(o, o + oc)) or \
                     any(not allowed_change(rel, k, news, new_heads) for k in range(nw, nw + nc)):
-                bad = True
+                out.append(f"{rel}: finished session {name} is frozen; only a finding's status/adopted_in and a "
+                           "unit's ## Changed by may change")
                 break
-        if bad:
-            out.append(f"{rel}: finished session {parts[1]} is frozen; only a finding's status/adopted_in and a "
-                       "unit's ## Changed by may change")
     return out
+
+
+def template_origin(root, env):
+    """origin's URL when it points at TEMPLATE_ORIGIN (owner/name), else None."""
+    template = env.get("TEMPLATE_ORIGIN", "").strip().strip("/")
+    url = (git(root, "remote", "get-url", "origin") or "").strip()
+    if template and url and re.search(r"[:/]" + re.escape(template) + r"(\.git)?/?$", url):
+        return url
+    return None
 
 
 def adoption(root, env):
@@ -222,13 +277,26 @@ def adoption(root, env):
     for n, line in project:
         m = PLACEHOLDER.search(line)
         if m:
-            out.append(f"AGENTS.md:{n}: ## Project still holds a placeholder {m.group(0)}")
+            out.append(f"AGENTS.md:{n}: ## Project still holds template text {m.group(0)}")
     workload = [line for _n, line in project if "workload shapes" in line.lower()]
-    if not (root / "docs" / "workload-shapes.md").is_file() and not any("none" in line.lower() for line in workload):
+    shapes = root / "docs" / "workload-shapes.md"
+    says_none = any("none" in line.lower() and not PLACEHOLDER.search(line) for line in workload)
+    if not shapes.is_file() and not says_none:
         out.append("docs/workload-shapes.md missing and AGENTS.md ## Project does not say workload shapes: none")
+    elif shapes.is_file() and EXAMPLE_MARKER in shapes.read_text() and not says_none:
+        out.append(f"docs/workload-shapes.md still holds its {EXAMPLE_MARKER} marker; write real shapes or say none")
+    arch = root / "docs" / "ARCHITECTURE.md"
+    for n, line in enumerate(arch.read_text().splitlines() if arch.is_file() else [], 1):
+        cells = [c.strip() for c in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
+        if len(cells) >= 3 and cells[0] == "Gate" and "Stub" in cells[2]:
+            out.append(f"docs/ARCHITECTURE.md:{n}: Gate row still says Stub; describe the project's gate stages")
     gate = root / "scripts" / "gate.sh"
-    if gate.is_file() and "examples/kv-python" in gate.read_text():
-        out.append("scripts/gate.sh still delegates to examples/kv-python; write the project's product stages")
+    for n, line in enumerate(gate.read_text().splitlines() if gate.is_file() else [], 1):
+        if "examples/kv-python" in line and not line.lstrip().startswith("#"):
+            out.append(f"scripts/gate.sh:{n}: still runs examples/kv-python; write the project's product stages")
+    url = template_origin(root, env)
+    if url:
+        out.append(f"git origin {url} is the template (TEMPLATE_ORIGIN); point origin at the project's own repo")
     return out
 
 
@@ -237,7 +305,8 @@ def main(args):
     if "--adoption" in args:
         errors, warnings = adoption(ROOT, env), []
     else:
-        errors = index_lines(ROOT) + skills(ROOT) + loose_files(ROOT) + registers(ROOT) + frozen_sessions(ROOT)
+        errors = (index_lines(ROOT) + skills(ROOT) + loose_files(ROOT) + registers(ROOT) + coverage(ROOT)
+                  + frozen_sessions(ROOT))
         warnings = []
         (warnings if "--cheap" in args else errors).extend(scratch(ROOT, env))
     for w in warnings:

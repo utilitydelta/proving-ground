@@ -192,13 +192,14 @@ def main() -> int:
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--steps", type=int, default=STEPS)
     parser.add_argument("--timeout", type=float, default=60.0, help="wall-clock cap; past it the run is red")
-    parser.add_argument("--tree", type=Path, help="product tree; default KV_TREE, then the example's product/")
-    parser.add_argument("--tape-dir", type=Path, default=Path("."))
+    parser.add_argument("--tree", type=Path, help="product tree; default TREE, then the example's product/")
+    parser.add_argument("--tape-dir", type=Path, default=Path(os.environ.get("RUN_OUT", ".")),
+                        help="where a red run writes its tape; default RUN_OUT (set by scripts/run.sh), then .")
     parser.add_argument("--replay", type=Path, help="run one recorded tape instead of seeds; --tree defaults to the tape's")
     parser.add_argument("--keep-going", action="store_true", help="run every seed, report caught/total and the worst gap")
     args = parser.parse_args()
 
-    given = args.tree or (Path(os.environ["KV_TREE"]) if os.environ.get("KV_TREE") else None)
+    given = args.tree or (Path(os.environ["TREE"]) if os.environ.get("TREE") else None)
     if args.replay:
         return replay_tape(given, args.replay)
 

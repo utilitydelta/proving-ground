@@ -21,7 +21,7 @@ Agents own these. Every session loads exactly one mode skill first; the mode pul
 | `fast-feedback` | Picks the tier, bounds every run, owns compute discipline | every mode that runs anything |
 | `dst` | Seeded simulator at the declared seam, reference model, checker, tapes | `task`, `factory`, `invariant`, `watch` when a subject is touched |
 | `triage` | Classifies a confirmed finding, decides whether it interrupts | `watch`, `task`, `factory`, any confirmed finding |
-| `finish` | Clean tree, current docs, INDEX row, commit, push | end of every session |
+| `finish` | Clean tree, gate, current docs, INDEX row, commit, `scripts/push.sh` | end of every session, debriefs included |
 | `present` | Picks a format beyond `report.md` | `task`, `tend`, `factory`, `debrief` at the end |
 
 ## Routing
@@ -33,7 +33,7 @@ task      -> build-method:scout? -> build-method:implementation-loop
 factory   -> task (Build) -> fast-feedback (heavy = job) -> triage
              -> pause: tend + think agents -> finish under 30 min to deadline
 tend      -> fast-feedback (budgets, mutants) -> finish
-debrief   -> present? -> commit
+debrief   -> present? -> finish
 closeoff, invariant -> dst (tapes) -> finish
 ```
 

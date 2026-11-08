@@ -17,17 +17,17 @@ A slow check does not get run, and an untargeted one starves every other run on 
 | harness | minutes | `scripts/gate.sh <tree> harness`: every harness compiles against the tree, every plant patch still applies and goes red | after a harness or API change; phase end |
 | full | minutes and up | `scripts/gate.sh <tree> full`, sweeps, fuzz, whole-folder mutants, soaks | once per phase end, or as a job |
 
-BLIND means the stage did not build or graded nothing; a gate with one is red. A tier with no budget in `INDEX.md` gets one the first time it runs. A run past its budget: stop it, record it, fix the tier. Never wait longer.
+Verdicts are `OK`, `FAIL` or `BLIND`, with times to two decimals. BLIND graded nothing: timeout (124), kill (137), heavy slot busy (75), cannot run (126, 127), build failure. The gate exits 0 when all are OK, 2 on any BLIND, else 1. BLIND is red, never a pass with a caveat. A tier with no budget in `INDEX.md` gets one the first time it runs. A run past its budget: stop it, record it, fix the tier. Never wait longer.
 
 ## Every run
 
 The rules are in `AGENTS.md` Compute. The mechanics:
 
-- `scripts/run.sh [-t secs] [-H] [-l log] -- cmd`. Default timeout `RUN_TIMEOUT` (300 s); `-t` above it is refused unless `-H`. It exports `RUN_OUT`, a build-output dir of its own, and logs under `.run/logs/` unless `-l` says otherwise. The exit status is the command's.
-- `-H` takes a heavy slot. Exit 75 means every slot is busy: do something else and retry later, or hand it to Factory as a job. Never run it without `run.sh`.
+- `scripts/run.sh [-t secs] [-H] [-l log] -- cmd`. Default timeout `RUN_TIMEOUT`; `-t` above it is refused unless `-H`, and `HEAVY_TIMEOUT_MAX` caps `-H`. The exit status is the command's.
+- Output homes: `RUN_OUT` (fresh under `.run/out/`) for tapes and results, `.run/tmp/` for copies, `.run/build/` for build caches (`CARGO_TARGET_DIR`, `PYTHONPYCACHEPREFIX`, `PYTHONDONTWRITEBYTECODE`), `.run/logs/` unless `-l`. Nothing builds inside the human repo; a tool that must write its tree runs on a snapshot copy. Evidence the report cites gets copied into the session's `scratch/`.
+- `-H` takes a heavy slot. Slots are machine-wide, shared across clones. Exit 75 means every slot is busy: do something else and retry later, or hand it to Factory as a job. Never run it without `run.sh`.
 - An agent past its budget finishes the run in flight and reports.
 - Bound every driver loop with a step cap, never "until the system settles".
-- Each run writes under a fresh `mktemp -d` in the session's `scratch/`; nothing deletes there mid-session.
 
 ## Briefs
 
@@ -47,7 +47,7 @@ A wide property range rarely draws the edge: give the edge a fixed case. A symbo
 
 ## Which rows
 
-`scripts/affected.sh [base]` prints the `harness/coverage.tsv` commands for the paths a human diff touches. Run those. Every new row runs at every gate config (`AGENTS.md` `## Project`) before it counts: rows green at the round configs go red at the odd ones. A changed area with no row is a coverage gap for Tend or the next Task.
+`scripts/affected.sh [base]` prints the `harness/coverage.tsv` commands for the paths a human diff touches; `--run` runs each through `run.sh` with `TREE` set to the live `HUMAN_REPO`. Harness code reads one tree variable, `TREE`: the gate and `plants.sh` set it to a snapshot or a planted copy, `affected.sh` to the live tree. A command with a hard-coded path grades the wrong code. Every new row runs at every gate config (`AGENTS.md` `## Project`) before it counts: rows green at the round configs go red at the odd ones. A changed area with no row is a coverage gap for Tend or the next Task.
 
 ## Checks on checks
 

@@ -5,8 +5,8 @@
 #
 # Modes (AGENTS.md): watch task factory tend debrief closeoff invariant. N is the highest existing session-vN plus one,
 # picked and claimed under the same lock new-id.sh takes (lib/alloc.sh), so two sessions started together never share
-# an N. Writes goal.md (## Ask, ## Acceptance, ## Delta, ## Builds on), log.md, human.md, report.md, scraps.md,
-# findings/, briefs/, reviews/ and scratch/ (gitignored). Factory mode adds what scripts/factory.sh and the factory
+# an N. Writes goal.md (## Ask, ## Acceptance, ## Delta, ## Weight, ## Builds on), log.md, human.md, report.md,
+# scraps.md, findings/, briefs/, reviews/ and scratch/ (gitignored). Factory mode adds what scripts/factory.sh and the factory
 # skill read: session-state.md, progress.md, units/ and jobs/{pending,running,done}/. Prints the folder.
 set -euo pipefail
 
@@ -39,6 +39,8 @@ cat > "$dir/goal.md" <<EOF
 ## Acceptance
 
 ## Delta
+
+## Weight
 
 ## Builds on
 EOF

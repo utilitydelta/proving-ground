@@ -18,23 +18,23 @@
 # One line per plant:
 #   OK <plant> <secs>s   the check went red on the patched copy
 #   FAIL <plant>         the check stayed green: the harness is blind to this bug
-#   BLIND <plant>        no check line, the patch does not apply, the check is red on the clean tree, or the run was
-#                        refused, timed out or killed (run.sh 75, 124, 137; shell 126, 127)
-# Exit 0 only if every plant is OK; 1 if any FAIL; 3 if any BLIND and none FAIL (or no plants at all); 2 on usage.
-# Work dirs stay under one mktemp -d, printed on stderr, so a tape or log can be read after the run. Nothing is
-# deleted here: scripts/clean-tmp.sh clears PG_TMP (.run/tmp/).
+#   BLIND <plant>        no check line, the patch does not apply, the check is red on the clean tree, or the check
+#                        could not judge (lib/verdict.sh: run.sh 75, 124, 137; shell 126, 127)
+# Exit as every gate does (lib/verdict.sh gate_exit): 0 every plant OK, 2 any BLIND (no plants at all, or a usage
+# error, counts), else 1. Work dirs live under one mktemp -d in PG_TMP, removed when every plant is OK and kept, with
+# the path on stderr, otherwise, so a tape or log can be read after a red run.
 set -uo pipefail
 
 (( $# == 2 )) || { sed -n 4p "$0" >&2; exit 2; }
 root=$(cd "$(dirname "$0")/.." && pwd)
+# shellcheck source=lib/verdict.sh
+source "$root/scripts/lib/verdict.sh"
 tree=$(cd "$1" && pwd) || { echo "plants: no tree at $1" >&2; exit 2; }
 plants_dir=$(cd "$2" && pwd) || { echo "plants: no plants dir at $2" >&2; exit 2; }
 mkdir -p "${PG_TMP:=$root/.run/tmp}"
+export PG_TMP
 work=$(mktemp -d "$PG_TMP/plants.XXXXXX")
 echo "plants: tree $tree, work dir $work" >&2
-
-now() { if [[ -n ${EPOCHREALTIME:-} ]]; then echo "${EPOCHREALTIME/,/.}"; else date +%s; fi; }
-secs() { awk -v a="$1" -v b="$2" 'BEGIN { printf "%.2f", b - a }'; }
 
 copy_tree() {
     mkdir -p "$1" && tar -C "$tree" --exclude=.git -cf - . | tar -C "$1" -xf -
@@ -60,8 +60,6 @@ run_check() {
     )
     rc=$?
 }
-
-unrunnable() { case $1 in 75|124|126|127|137) return 0 ;; *) return 1 ;; esac; }
 
 baseline_checks=() baseline_codes=()
 baseline() {
@@ -100,16 +98,15 @@ for patch in "$plants_dir"/*.patch; do
     run_check "$dir" "$dir/tree" "$check" "$limit"
     code=$rc
     took=$(secs "$began" "$(now)")
-    if (( code == 0 )); then
-        echo "FAIL $name (check green on the planted bug; log $dir/check.log)"; fails=$(( fails + 1 ))
-    elif unrunnable "$code"; then
-        echo "BLIND $name (check could not finish, exit $code: $(cat "$dir/run.line"))"; blinds=$(( blinds + 1 ))
-    else
-        echo "OK $name ${took}s"
-    fi
+    # Inverted: the check going red is the plant's OK, but a check that could not judge is BLIND either way.
+    case $(verdict_of "$code") in
+        OK) echo "FAIL $name ${took}s (check green on the planted bug; log $dir/check.log)"; fails=$(( fails + 1 )) ;;
+        BLIND) echo "BLIND $name ${took}s (check could not finish, exit $code: $(cat "$dir/run.line"))"
+               blinds=$(( blinds + 1 )) ;;
+        *) echo "OK $name ${took}s" ;;
+    esac
 done
 
-(( count )) || { echo "BLIND (no plants in $plants_dir)"; exit 3; }
-(( fails )) && exit 1
-(( blinds )) && exit 3
-exit 0
+(( count )) || { echo "BLIND (no plants in $plants_dir)"; blinds=1; }
+if (( fails + blinds )); then echo "plants: kept $work" >&2; else drop_tmp "$work"; fi
+gate_exit "$blinds" "$fails"

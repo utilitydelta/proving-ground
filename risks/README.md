@@ -35,4 +35,15 @@ evidence: <command, test or tape that shows the scenario>
 
 Adapt the consequence column to the product's worst outcomes when adopting; keep five rows.
 
+## Status and the check
+
+- `open`: scored, nothing decided. `proposed`: a control is designed, not built.
+- `controlled`: the control exists and runs. `accepted`: the human accepted the risk by name.
+
+A risk at 12 or more with no control yet is still filed today: `status: open` or `proposed`, `control: none` or the design, and `decision:` pointing at a decision with `status: open` that names the control question. It shows in `scripts/risks.py open` until it is answered. Never mark it `accepted` to quiet the list.
+
+`scripts/risks.py check` refuses a `controlled` or `accepted` risk scored 12 or more unless `control:` names a real control (not `none`) and `decision:` points at a decision whose status is `decided` or `confirmed`.
+
+## Scoring notes
+
 Likelihood comes from what the real world needs to produce the schedule, never from how many seeds fired. Seed counts measure the scheduler. When the human rescores, the History line says so.

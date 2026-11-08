@@ -4,7 +4,7 @@ from pathlib import Path
 
 from loader import DEFAULT_TREE, load_product
 
-kv = load_product(Path(os.environ.get("KV_TREE", DEFAULT_TREE)))
+kv = load_product(Path(os.environ.get("TREE", DEFAULT_TREE)))
 
 
 def perform(core, effects, log: bytearray, completions=("append", "fsync")) -> list[int]:

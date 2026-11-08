@@ -7,8 +7,10 @@
 # Each iteration loads the `factory` skill against <session-dir>, does one bounded step and exits. Queued jobs
 # (<session-dir>/jobs/pending/*.sh) run in the background with no Claude process waiting on them, so a long test or
 # simulation never holds a context past the prompt-cache TTL. Each job is a heavy run through scripts/run.sh -H: it
-# shares the machine's HEAVY_JOBS slots (RUN_DIR/heavy/) with every interactive heavy run, under a hard timeout from
-# `# timeout: <seconds>` in its first 10 lines, else 3600. A timeout is written into the job's .out. When every slot is
+# shares the machine's HEAVY_JOBS slots (HEAVY_DIR) with every interactive heavy run, under a hard timeout from
+# `# timeout: <seconds>` in its first 10 lines, else HEAVY_TIMEOUT_MAX. A job asking for more than HEAVY_TIMEOUT_MAX
+# never starts: it lands in done/ with exit 2 and a `runner: refused` line in its .out. A timeout is written into the
+# job's .out. When every slot is
 # held elsewhere (run.sh exit 75) the job goes back to pending and no job starts for FACTORY_BUSY_BACKOFF seconds
 # (default 60). When an iteration changes nothing while a job runs or waits, the runner waits for a job to finish
 # instead of iterating.
@@ -37,7 +39,7 @@ model=${FACTORY_MODEL:-opus}
 max_iterations=1000
 gap=0
 pause_every=3
-default_job_timeout=3600
+default_job_timeout=$HEAVY_TIMEOUT_MAX
 busy_backoff=${FACTORY_BUSY_BACKOFF:-60}
 while (( $# )); do
     case $1 in
@@ -122,6 +124,14 @@ job_timeout() {
 run_job() {
     local name=$1 limit code start=$SECONDS out=$session/jobs/done/$1.out
     limit=$(job_timeout "$session/jobs/running/$name.sh")
+    if (( limit > HEAVY_TIMEOUT_MAX )); then
+        [[ -e $out ]] && mv "$out" "$out.$(date +%s)"
+        echo "runner: refused, # timeout: $limit is past HEAVY_TIMEOUT_MAX $HEAVY_TIMEOUT_MAX (project.env); split the job" > "$out"
+        echo 2 > "$session/jobs/done/$name.exit"
+        mv "$session/jobs/running/$name.sh" "$session/jobs/done/$name.sh"
+        note "job $name refused: timeout $limit past HEAVY_TIMEOUT_MAX $HEAVY_TIMEOUT_MAX"
+        return
+    fi
     # Output of an earlier attempt that a stopped runner killed: kept beside, never overwritten.
     [[ -e $out ]] && mv "$out" "$out.$(date +%s)"
     note "job $name start, timeout ${limit} s"

@@ -17,7 +17,7 @@ Load `task` and follow its Build section. Each unit gets a weight (`AGENTS.md` W
 
 1. Read `session-state.md`, the tail of `log.md`, and every `jobs/done/*.out` and `.exit` newer than the last iteration line.
 2. Human repo HEAD moved since the `human head:` line? Rebase lead onto it. Conflict: `Status: blocked` with the files, exit.
-3. Under 30 minutes to the deadline: run `finish`, set `Status: done`, exit.
+3. Under 30 minutes to the deadline: run `finish`. It queues the harness and full gates as jobs and exits; the iteration that reads their results completes `finish`, sets `Status: done` and exits.
 4. Prompt says `Pause iteration`: run the pause (below), go to 7. Otherwise take the first unit in `## Queue` not in `## Waiting` whose `job:` is `none` or has its `.out`. No such unit:
    - some unit waits on a job: exit without touching state; the runner runs the job and starts the next iteration;
    - every remaining unit waits on a door: follow Doors.

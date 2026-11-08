@@ -43,15 +43,20 @@ Skills here name plugin skills by full name (`build-method:writing-tests`) and n
 
 ## Adopting it
 
-1. Create a repo from this template next to the human repo.
-2. Fill `project.env` (paths, read-only dirs, run caps) and the `## Project` section of `AGENTS.md`.
-3. `scripts/hooks/install.sh`. The Claude Code hooks (`.claude/settings.json`) refuse writes under the human repo and recursive deletes outside session scratch.
-4. Write the gate stages in `scripts/gate.sh`; its header holds the contract. Until then the stub prints BLIND and exits 2 for any tree but the example's.
-5. Add harness workspaces under `harness/<language>/`, depending on the human repo by path. `harness/README.md` has a recipe per ecosystem, the `coverage.tsv` columns and the plant format.
-6. `scripts/lint.py --adoption` passes.
-7. Load the `task` skill. It creates the session.
+1. Make your copy next to the human repo, private, with its own origin:
+   ```
+   gh repo create <name> --private --template utilitydelta/proving-ground --clone
+   ```
+   Or clone it and run `git remote set-url origin <your repo>`. `scripts/push.sh` refuses to push to the template.
+2. Fill `project.env` (paths, read-only dirs, run caps) and every `<...>` in the `## Project` section of `AGENTS.md`. The human replaces the example row in `docs/workload-shapes.md` with real shapes, or the file goes and `## Project` says none.
+3. `scripts/hooks/install.sh`. The Claude Code hooks (`.claude/settings.json`) refuse writes, installs and in-tree builds under the human repo, and recursive deletes outside session scratch.
+4. Load the `task` skill with "build the first harness and the gate". It creates `session-v1`, so the decisions the first harness forces have a session to land in.
+5. In that session, write the product stages in `scripts/gate.sh` under `# ADOPT: product stages below`; the header holds the contract. Until then the stub prints BLIND and exits 2 for any tree but the example's.
+6. Add harness workspaces under `harness/<language>/`. They import the product from `$TREE` at run time; `harness/README.md` has a recipe per ecosystem, the `coverage.tsv` columns and the plant format. Add the first plant with `scripts/new-plant.sh`.
+7. Delete the example: `examples/`, the sample-records links in `decisions/README.md` and `risks/README.md`, the line in `scripts/gate.sh` that delegates to the example, and the example's rows in `harness/coverage.tsv`. Set the Gate row in `docs/ARCHITECTURE.md` to what your gate runs.
+8. Done when `scripts/lint.py --adoption` passes. It fails on any `<...>` left in `## Project`, the `EXAMPLE ROW` still in `docs/workload-shapes.md`, the ARCHITECTURE Gate row still saying `Stub`, or origin still pointing at the template.
 
-`examples/kv-python/` is a worked example: a toy key-value store as the "human" code, a seeded simulator with a reference model, a checker, a planted mutation that the checker catches, and a gate. Read it before writing your first harness. Delete it once you have your own.
+`examples/kv-python/` is a worked example: a toy key-value store as the "human" code, a seeded simulator with a reference model, a checker, planted bugs the checker catches, and a gate. Read it before writing your first harness.
 
 ## Week one
 

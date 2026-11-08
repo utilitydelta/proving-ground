@@ -12,7 +12,7 @@ description: Task mode. Use when the human hands over an explicit job, such as "
 3. `## Delta`: inventory what exists (`INDEX.md`, `harness/coverage.tsv`, semantic search if listed, then grep). Build only the gap.
 4. `## Builds on`: `scripts/decisions.py touches <path>` for the code the goal touches. A load-bearing provisional decision goes to the human before the build.
 5. **Implied parts.** The human asks for A; A needs B, which the goal never names. List every such part. With a prior system, find its version of each (file and line) and keep it or file the deviation as a decision. An agent that builds its own B' without reading the prior B drops promises nobody sees until something built on the flow breaks.
-6. **Weight** (`AGENTS.md` Weight): pick the row, write it in `goal.md` with one clause of why. It decides which of the steps below run.
+6. **Weight** (`AGENTS.md` Weight): pick the row, write it in `goal.md` `## Weight` with one clause of why. It decides which of the steps below run.
 7. Full weight: premise review and the Pushback gate (`AGENTS.md` Pushback) before any build.
 
 Scope rough goals with `build-method:scout` first when the shape is unclear.

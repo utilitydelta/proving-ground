@@ -15,12 +15,18 @@ Load `build-method:writing-style` and `build-method:hierarchical-context-docs` f
 - `git config core.hooksPath` says `scripts/hooks`; if not, `scripts/hooks/install.sh`. Without the hook, scratch gets force-added and the push is refused for size.
 - Throwaway tests and bins outside `scratch/` are deleted or promoted with a name that says what they prove. Dead code the session left: delete.
 - Scratch over `SCRATCH_BUDGET` (`scripts/lint.py` says): clear finished sessions' scratch, never this one's, one literal `rm -rf sessions/<session>/scratch/<dir>` per entry (`AGENTS.md` Compute).
-- Background processes the session started: `ps`, then stop them. No test binary outlives the session.
+- Background processes the session started: `ps`, then stop them. No test binary outlives the session. Then `scripts/clean-tmp.sh` clears `.run/tmp`, `.run/out` and `.run/logs`; evidence the report cites lives in `scratch/`, not there.
 - The human repo is untouched: `git -C <human repo> status` shows only the human's own changes.
 
 ## 2. Gate
 
-At least `scripts/gate.sh <tree> quick` and `harness`, `full` when the session changed a harness or lead code, through `scripts/run.sh -H`. The gate judges bot trees at HEAD, so commit the work locally first; step 8 amends that commit and pushes. State each command and its result in `report.md`, stage by stage when any is FAIL or BLIND. Red is reported red, never smoothed.
+The gate judges bot trees at HEAD, so commit the work locally first; step 8 amends that commit and pushes.
+
+- `scripts/gate.sh <tree> quick` and `harness`; `full` too when the session changed a harness or lead code. Its `lint` stage covers this repo's hygiene. Heavy tiers go through `scripts/run.sh -H -t <secs>`, with `-t` taken from the tier's budget in `INDEX.md` `## Tier budgets`, never guessed.
+- `scripts/changed-tooling.sh <session base>` says the session touched `scripts/`, `.claude/` or `project.env`: run `scripts/check-tooling.sh quick` (`harness` when a script changed). Otherwise skip it.
+- **Factory:** run the quick gate inline; queue `harness` and `full` as jobs (`factory` Long runs are jobs) and exit. The iteration that finds their `.out` writes the verdicts into `report.md` and carries on from step 3. Never wait on them inline.
+
+State each command and its verdicts in `report.md`, stage by stage when any is FAIL or BLIND. BLIND graded nothing and is red. Red is reported red, never smoothed.
 
 ## 3. Docs: current state only
 
@@ -59,8 +65,8 @@ Check the session did none of these; one found goes in `report.md` and the next 
 grep -n -P "\x{2014}|key insight|it's worth noting|comprehensive|robust|seamless|delve|leverag|in order to" <files>
 ```
 
-Also: hedges, fake balance, wrap-up sentences, numbers with no command or file behind them, TODOs without an owner. Fix each. Then `scripts/lint.py`, `scripts/decisions.py check` and `scripts/risks.py check` pass.
+Also: hedges, fake balance, wrap-up sentences, numbers with no command or file behind them, TODOs without an owner. Fix each. Then `scripts/lint.py`, `scripts/decisions.py check`, `scripts/risks.py check` and `scripts/findings.py check` pass.
 
 ## 8. Commit and push
 
-Add the session line to `INDEX.md` `## Sessions`: `session-vN-<mode>-<slug>: outcome`, under 150 characters. One commit for the session: code, docs, skills, session folder. Push. Tell the human the commit and the one or two things they need to decide.
+Add the session line to `INDEX.md` `## Sessions`: `session-vN-<mode>-<slug>: outcome`, under 150 characters. One commit for the session: code, docs, skills, session folder. Push with `scripts/push.sh`, never bare `git push`: it refuses the template origin. Tell the human the commit and the one or two things they need to decide.

@@ -18,6 +18,7 @@ Why bother for a toy? Because the shape is the point. Copy the shape, not the co
 | `plants/*.patch` | Planted bugs as unified diffs against `product/`, each naming the check that must go red | Green is not self-graded |
 | `../../scripts/plants.sh` | Applies each plant to a copy of the tree and runs its check; language-agnostic | An experiment on human code edits a copy, never the tree |
 | `gate.sh` | Snapshot, then stages under `scripts/run.sh`, one `OK/FAIL/BLIND` line each | Every run has a hard timeout; every tier has a measured budget |
+| `coverage.rows.tsv` | The example's rows for `harness/coverage.tsv`: glob, command, tier, measured budget, plant | A new test file gets a coverage row |
 | `sample-records/` | D-001 (torn tail drop vs refuse) and R001 (crash between write and fsync), filled in | Decisions, Risks |
 
 ## What the checker holds the product to
@@ -63,7 +64,7 @@ The check's budget is 200 seeds, over ten times the worst measured gap.
 From this folder; `$d` is a planted copy made as in the plant table:
 
 ```sh
-python3 -m unittest discover -s harness -p 'test_*.py'
+python3 -m unittest discover -s harness -p 'test_*.py'                  # TREE=<copy> to test another tree
 python3 harness/sim.py --seeds 200 --timeout 60                        # clean product, green
 python3 harness/sim.py --tree "$d/tree" --seeds 200 --tape-dir "$d"     # planted copy: red, writes a tape
 python3 harness/sim.py --replay "$d"/tape-*-seed3.json                   # replays on the tape's own tree: same step, same message
@@ -72,18 +73,18 @@ python3 harness/sim.py --replay "$d"/tape-*-seed3.json --tree product   # same t
 ./gate.sh product quick                                                 # or harness, or full
 ```
 
-A tape records the tree path and a digest of `kvcore.py`; replay says whether the tree it ran matches. `--tree PATH` (or `KV_TREE`) points the sim and the unit tests at another product tree.
+A red run writes its tape to `--tape-dir`, else `RUN_OUT` (set by `scripts/run.sh`), else the current dir. A tape records the tree path and a digest of `kvcore.py`; replay says whether the tree it ran matches. `--tree PATH` (or `TREE`) points the sim at another product tree; `TREE` does the same for the unit tests. Unset, both use `product/`.
 
 ## Gate tiers
 
-`./gate.sh <tree> [quick|harness|full]`. `scripts/gate.sh` delegates here. The tree is snapshotted first, uncommitted edits included, into a fresh `mktemp -d` under `.run/tmp/`; every stage runs on the snapshot under `scripts/run.sh` with its own log. The run dir is printed on stderr and kept (logs, tapes); `scripts/clean-tmp.sh` clears them.
+`./gate.sh <tree> [quick|harness|full]`. `scripts/gate.sh` delegates here. The tree is snapshotted first, uncommitted edits included, into a fresh `mktemp -d` under `PG_TMP` (`.run/tmp/`); every stage runs on the snapshot under `scripts/run.sh` with `TREE` set to it and its own log. Verdicts come from `scripts/lib/verdict.sh`: exit 0 when every stage is OK, 2 when any is BLIND (a failed snapshot, a timeout, a plant that no longer applies), else 1. On exit 0 the gate removes its own run dir; on 1 or 2 it keeps it and prints the path on stderr (logs, tapes) for `scripts/clean-tmp.sh`.
 
 | Tier | Stages | Wall-clock, three runs | Stage `-t` |
 |---|---|---|---|
-| quick | unit, sim 200 seeds | 0.40 to 0.41 s | 60, 60 |
-| harness | compile (`py_compile` every harness module), plants | 0.47 to 0.50 s | 60, 240 |
-| full | quick, harness, then sweep (seeds 200..2199, heavy `-H`) | 1.45 to 1.47 s | plus 300 |
+| quick | unit, sim 200 seeds | 0.63 to 0.64 s | 60, 60 |
+| harness | compile (`compile()` every harness module, no `.pyc` written), plants | 0.70 to 0.72 s | 60, 240 |
+| full | quick, harness, then sweep (seeds 200..2199, heavy `-H`) | 2.13 to 2.19 s | plus 300 |
 
-This machine, 32 cores (the gate uses one), Python 3.12.3. Per stage in one full run: unit 0.27 s, sim 0.13 s, compile 0.04 s, plants 0.32 s, sweep 0.71 s. The timeouts sit far above the budgets for a toy; in a real harness set them near the measured number, so a slow run turns red instead of eating the afternoon.
+This machine, 32 cores (the gate uses one), Python 3.12.3. Per stage in one full run: unit 0.42 s, sim 0.22 s, compile 0.03 s, plants 0.69 s, sweep 0.83 s. `scripts/run.sh` sets `PYTHONPYCACHEPREFIX` and `PYTHONDONTWRITEBYTECODE=1`, so no bytecode cache is ever written and every run compiles the standard library modules it imports: the unit suite takes 0.38 s that way against 0.11 s with a warm bytecode cache. The timeouts sit far above the budgets for a toy; in a real harness set them near the measured number, so a slow run turns red instead of eating the afternoon.
 
-Run against each planted copy of the product, `gate.sh <copy> quick` fails both stages and exits 1.
+Run against a planted copy of the product, `gate.sh <copy> quick` fails both stages and exits 1. A plant that no longer applies to the tree makes the harness tier BLIND and exit 2.

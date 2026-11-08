@@ -1,0 +1,4 @@
+glob	command	tier	budget_s	plant
+kvcore.py	scripts/run.sh -t 60 -- python3 -m unittest discover -s examples/kv-python/harness -p 'test_*.py'	targeted	1	examples/kv-python/plants/refuse_torn_tail.patch
+kvcore.py	scripts/run.sh -t 60 -- python3 examples/kv-python/harness/sim.py --tree "$TREE" --seeds 200	targeted	1	examples/kv-python/plants/ack_before_fsync.patch
+kvcore.py	scripts/run.sh -t 300 -H -- python3 examples/kv-python/harness/sim.py --tree "$TREE" --seeds 2000 --start 200	full	1	examples/kv-python/plants/accept_mid_log_corruption.patch

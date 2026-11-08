@@ -4,7 +4,7 @@ from pathlib import Path
 
 from loader import DEFAULT_TREE, load_product
 
-kv = load_product(Path(os.environ.get("KV_TREE", DEFAULT_TREE)))
+kv = load_product(Path(os.environ.get("TREE", DEFAULT_TREE)))
 
 RECORDS = [kv.encode(kv.PUT, "a", "1"), kv.encode(kv.PUT, "b", "22"), kv.encode(kv.PUT, "c", "333")]
 LOG = b"".join(RECORDS)

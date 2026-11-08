@@ -6,13 +6,14 @@
 #
 #   scripts/test_factory.sh
 #
-# Exit 1 on the first failed case. Takes about two minutes, most of it the stub sleeping.
+# Exit 1 on the first failed case. 60 s on the template dev box (2026-11-09), most of it the stub sleeping.
 set -uo pipefail
 # No -e: each case inspects exit codes and greps that are expected to fail.
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(mktemp -d)
 export RUN_DIR=$root/rundir
+export HEAVY_DIR=$RUN_DIR/heavy
 # Run from a heavy gate stage, the caller's slot must not leak into the cases that count slots.
 unset RUN_HEAVY_SLOT
 fail() { echo "FAIL: $*"; exit 1; }
@@ -46,6 +47,8 @@ case $STUB_MODE in
                echo "Status: done" >> "$state"; fi ;;
     timeout) if (( n == 1 )); then echo "first" >> "$state"; printf '#!/usr/bin/env bash\n# timeout: 2\nsleep 30\n' > "$session/jobs/pending/slow.sh"
              elif [[ -e $session/jobs/done/slow.exit ]]; then echo "Status: done" >> "$state"; fi ;;
+    toolong) if (( n == 1 )); then echo "first" >> "$state"; printf '#!/usr/bin/env bash\n# timeout: 99999\necho ran\n' > "$session/jobs/pending/big.sh"
+             elif [[ -e $session/jobs/done/big.exit ]]; then echo "Status: done" >> "$state"; fi ;;
     weekly) echo '{"type":"assistant","text":"You'"'"'ve hit your weekly limit · resets Mon 12:00am"}' ;;
     session) echo '{"type":"assistant","text":"You'"'"'ve hit your 5-hour limit · resets 11:59pm"}' ;;
     stopjob) echo "sleep 60" > "$session/jobs/pending/a.sh"; echo "step $n" >> "$state"; sleep 3; touch "$session/STOP" ;;
@@ -121,6 +124,13 @@ grep -q "stop: Status: done" "$root/timeout/progress.md" || fail "timeout: $(cat
 grep -q "killed by its 2 s timeout" "$root/timeout/jobs/done/slow.out" || fail "timeout: .out does not say so"
 grep -q "job slow exit 124 after [0-9] s" "$root/timeout/progress.md" || fail "timeout: ran past its timeout"
 
+# A `# timeout:` past HEAVY_TIMEOUT_MAX never runs: refused into done/ with exit 2 and a line saying why.
+HEAVY_TIMEOUT_MAX=600 run toolong --until "+1 hour"
+grep -q "stop: Status: done" "$root/toolong/progress.md" || fail "toolong: $(cat "$root/toolong/runner.out")"
+[[ $(cat "$root/toolong/jobs/done/big.exit") == 2 ]] || fail "toolong: exit $(cat "$root/toolong/jobs/done/big.exit")"
+grep -q "runner: refused, # timeout: 99999 is past HEAVY_TIMEOUT_MAX 600" "$root/toolong/jobs/done/big.out" \
+    && ! grep -q '^ran$' "$root/toolong/jobs/done/big.out" || fail "toolong: $(cat "$root/toolong/jobs/done/big.out")"
+
 run weekly --until "+1 hour"
 grep -q "stop: weekly limit" "$root/weekly/progress.md" || fail "weekly: $(cat "$root/weekly/runner.out")"
 
@@ -184,4 +194,4 @@ run done --until "-1 minute"
 [[ $(cat "$root/done/exit") == 2 ]] || fail "past deadline: expected refusal"
 
 [[ $root == "${TMPDIR:-/tmp}"/tmp.* ]] && rm -r -- "$root"
-echo "factory: 19 cases OK"
+echo "factory: 20 cases OK"

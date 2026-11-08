@@ -4,17 +4,22 @@
   scripts/risks.py            every risk, highest score first
   scripts/risks.py list       the same
   scripts/risks.py open       score 5 and up that is neither controlled nor accepted: owes a control or the human's call
-  scripts/risks.py check      exit 1 on a malformed file or an unfilled <...> skeleton placeholder
+  scripts/risks.py check      exit 1 on a malformed file or an unfilled skeleton placeholder (scripts/skeleton.py)
 
 Files are risks/RNNN-<slug>.md with a '# RNNN: <title>' line. RISKS_DIR overrides the folder (tests).
-check enforces AGENTS.md: score == likelihood x consequence, both 1-5, status in the enum, 12 and up controlled
-or backed by a decision, accepted at 5 to 11 citing the decision that accepted it.
+check enforces AGENTS.md: score == likelihood x consequence, both 1-5, status in the enum. open and proposed pass at
+any score: they are the queue. controlled or accepted at 12 and up needs a control (not `none`) and cites a decision
+that exists in decisions/. accepted at 5 to 11 cites a decision that exists and has been made (not open, not
+decided_by none). DECISIONS_DIR overrides where cited decisions are looked up.
 Columns: id, score, likelihood x consequence, status, decision, title.
 """
 import os
 import pathlib
 import re
 import sys
+
+import decisions
+from skeleton import placeholder_problems
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DIR = pathlib.Path(os.environ.get("RISKS_DIR") or ROOT / "risks")
@@ -23,15 +28,9 @@ REQUIRED = ("likelihood", "consequence", "score", "control", "status", "decision
 DECISION_ID = re.compile(r"\bD-\d+\b")
 
 
-# A skeleton placeholder from scripts/new-id.sh left unfilled: <...> holding three or more words. Generic types such as
-# Vec<u8> or Map<K, V> hold fewer and pass.
-PLACEHOLDER = re.compile(r"<(?:[^<>\n]*\s){2,}[^<>\n]*>")
-
-
 def placeholders(path):
-    """Lines still holding a skeleton placeholder, frontmatter and body alike."""
-    return [f"line {n} still holds a skeleton placeholder: {m.group(0)}"
-            for n, line in enumerate(path.read_text().splitlines(), 1) for m in [PLACEHOLDER.search(line)] if m]
+    """Lines still holding a skeleton placeholder (scripts/skeleton.py), frontmatter and body alike."""
+    return placeholder_problems(path.read_text())
 
 
 def load(path):
@@ -50,7 +49,13 @@ def number(d, key):
     return int(value) if value.isdigit() else None
 
 
-def problems(d):
+def decision_index():
+    """D-NNN -> its fields, for every decision on disk."""
+    folder = decisions.DIR
+    return {d["id"]: d for d in map(decisions.load, folder.glob("[0-9]*.md"))} if folder.is_dir() else {}
+
+
+def problems(d, known):
     if not d["frontmatter"]:
         return ["no --- frontmatter block"]
     out = [f"missing {k}" for k in REQUIRED if not d.get(k)]
@@ -63,11 +68,19 @@ def problems(d):
     status = d.get("status")
     if status not in STATUS:
         out.append(f"status {status!r} not one of {', '.join(STATUS)}")
-    cites = bool(DECISION_ID.search(d.get("decision", "")))
-    if score is not None and score >= 12 and status != "controlled" and not cites:
-        out.append(f"score {score} needs a control: status controlled or a decision behind it")
-    if score is not None and 5 <= score <= 11 and status == "accepted" and not cites:
-        out.append(f"accepted at score {score} without the decision that accepted it")
+    cited = DECISION_ID.findall(d.get("decision", ""))
+    missing = [c for c in cited if c not in known]
+    if score is not None and status in ("controlled", "accepted") and score >= 12:
+        if d.get("control", "none").strip().lower() in ("none", ""):
+            out.append(f"{status} at score {score} with control: none; 12 and up needs a control")
+        if not cited or missing:
+            out.append(f"{status} at score {score} must cite an existing decision (decision: {d.get('decision')!r})")
+    if score is not None and 5 <= score <= 11 and status == "accepted":
+        made = [c for c in cited if c in known and known[c].get("status") != "open"
+                and known[c].get("decided_by") not in ("none", None)]
+        if not made:
+            out.append(f"accepted at score {score} must cite the decision that accepted it, existing and made "
+                       f"(not open, not decided_by none); decision: {d.get('decision')!r}")
     if not d["title"]:
         out.append("no '# RNNN: title' line")
     elif d["id"] != d["path"].name.split("-")[0]:
@@ -86,7 +99,8 @@ def show(rs):
 
 
 def check(rs):
-    bad = [(r["path"].name, p) for r in rs for p in problems(r) + placeholders(r["path"])]
+    known = decision_index()
+    bad = [(r["path"].name, p) for r in rs for p in problems(r, known) + placeholders(r["path"])]
     ids = [r["id"] for r in rs]
     bad += [(i, "duplicate id") for i in sorted({i for i in ids if ids.count(i) > 1})]
     for name, p in bad:

@@ -9,6 +9,8 @@ The human is out of focus and has time to talk. Keep it short anyway.
 
 ## Prepare
 
+A debrief is a session: `scripts/new-session.sh debrief <slug>` first, and the human's rulings go in its `human.md` verbatim.
+
 1. Read `report.md`, `log.md` and `findings/` of every session since the last debrief.
 2. Diff the human repo from the first session's starting HEAD to now.
 
@@ -27,7 +29,9 @@ Long debrief: offer a format from `present`.
 
 ## Collect
 
-- Each finding: `adopted`, `rejected` or `noise`, written into its frontmatter. Update precision in `INDEX.md`. Once an adopted fix lands in the human repo, add `adopted_in: <sha>`. Never ask for anything bot-related in a human commit.
+- Each finding: `adopted`, `rejected` or `noise`, written into its frontmatter. Update `INDEX.md` `## Precision` from `scripts/findings.py stats`. Once an adopted fix lands in the human repo, add `adopted_in: <sha>`. Never ask for anything bot-related in a human commit.
 - Each decision shown: `confirmed` or `overturned` by name, with a History line and the human's words. A new call the human makes is `decided_by: human-informed`. Silence or typing past confirms nothing; what the human leaves goes on the next `closeoff` agenda.
 
-Commit and push.
+## End
+
+Run `finish`. `report.md` lists each verdict and ruling collected and what goes on the next `closeoff` agenda.

@@ -10,7 +10,7 @@ from pathlib import Path
 from loader import DEFAULT_TREE, load_product
 from sim import generate, run, worst_gap, write_tape
 
-TREE = Path(os.environ.get("KV_TREE", DEFAULT_TREE))
+TREE = Path(os.environ.get("TREE", DEFAULT_TREE))
 HERE = Path(__file__).resolve().parent
 PLANT = HERE.parent / "plants" / "ack_before_fsync.patch"
 
@@ -28,7 +28,7 @@ def replay(tape: Path, *tree: str) -> subprocess.CompletedProcess:
     args = ["--tree", tree[0]] if tree else []
     return subprocess.run(
         [sys.executable, str(HERE / "sim.py"), "--replay", str(tape), *args],
-        env={k: v for k, v in os.environ.items() if k != "KV_TREE"},
+        env={k: v for k, v in os.environ.items() if k != "TREE"},
         capture_output=True,
         text=True,
         timeout=60,
