@@ -3,7 +3,7 @@
 
   scripts/skeleton.py render <decision|risk|finding> <num> <title> <session> <date>   prints the skeleton
 
-decisions.py, risks.py and findings.py import placeholder_problems(): a line still holding one of the literal
+decisions.py, risks.py and findings.py import register_files(), read_register() and placeholder_problems(): a line still holding one of the literal
 placeholder strings below is unfilled. Only these exact strings count, so prose such as Vec<u8>, <path> in a quoted
 command, or anything inside backticks passes.
 """
@@ -54,6 +54,21 @@ evidence: <one command that reproduces it from this repo>
 
 PLACEHOLDERS = sorted({m for t in TEMPLATES.values() for m in re.findall(r"<[^<>\n]+>", t)}, key=len, reverse=True)
 BACKTICKED = re.compile(r"`[^`\n]*`")
+
+
+def register_files(folder):
+    """Every *.md in folder but README.md. check judges each one: a misnamed file is a problem, never skipped."""
+    return sorted(p for p in folder.glob("*.md") if p.name != "README.md") if folder.is_dir() else []
+
+
+def read_register(path):
+    """(text, problem): the file's text and None, or "" and why it cannot be read."""
+    try:
+        return path.read_text(encoding="utf-8"), None
+    except UnicodeDecodeError as e:
+        return "", f"not UTF-8 (bad byte at offset {e.start})"
+    except OSError as e:
+        return "", f"unreadable ({e.strerror})"
 
 
 def placeholder_problems(text):

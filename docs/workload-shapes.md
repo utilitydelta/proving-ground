@@ -1,6 +1,6 @@
 # Workload shapes
 
-Written by the human, not agents. Optional; `AGENTS.md` `## Project` says whether this project uses it.
+Written by the human, not agents. Optional: delete this file (and `AGENTS.md` `## Project` says none) or replace the EXAMPLE ROW below with real shapes.
 
 Why it exists: agents grade a trade (a cache size, a batching rule, a cap) against whatever scenario makes it look good, picked after the rule was written. Shapes written here first are the only ones a trade may be graded against. A trade names the shape it favours and the shape it costs.
 

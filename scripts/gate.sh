@@ -12,10 +12,10 @@
 #   scripts/check-tooling.sh, their own gate.
 # - Tiers nest: quick < harness < full. A stage declared with tier-min runs in that tier and every higher one.
 #   quick: what an agent runs after every change, within the quick budget in INDEX.md. harness: every harness
-#   compiles and every plant (scripts/plants.sh) goes red. full: sweeps and proofs; every stage runs heavy (-H) with
-#   its timeout raised to HEAVY_TIMEOUT_MAX.
-# - Snapshots, never a live tree. Stages run from a `git archive HEAD` copy of this repo, so uncommitted harness edits
-#   cannot make the verdict green. TREE is exported as a snapshot of <tree>: the human tree (HUMAN_REPO) with its
+#   compiles and every coverage row goes red on its plant (scripts/coverage-plants.sh). full: sweeps and proofs; every
+#   stage runs heavy (-H). A stage's declared -t stays its cap in every tier.
+# - Snapshots, never a live tree. Stages run from a `git archive HEAD` copy of this repo, through that copy's own
+#   scripts/run.sh and lib/verdict.sh, so uncommitted harness or tooling edits cannot change a verdict. TREE is exported as a snapshot of <tree>: the human tree (HUMAN_REPO) with its
 #   uncommitted edits (the gate prints its HEAD and a dirty hash), any other git tree at HEAD, a plain dir as is.
 #   GATE_TIER is exported too. The work dir is removed when every stage is OK and kept, with its path printed, when
 #   any is not. Logs go to RUN_DIR/logs/gate-<time>-<pid>/; scripts/clean-tmp.sh ages them out.
@@ -39,8 +39,9 @@ blind=0 failed=0 stages=0
 rank() { case $1 in quick) echo 1 ;; harness) echo 2 ;; full) echo 3 ;; *) echo 0 ;; esac; }
 
 # stage <name> <tier-min> [-H] [-t secs] [-b] -- <cmd...>
-#   -H heavy (scripts/run.sh -H), -t timeout (default RUN_TIMEOUT), -b exit 2 means BLIND (a build or usage failure,
-#   or a nested gate that exits 2 for BLIND). Runs <cmd> from the bot snapshot through scripts/run.sh.
+#   -H heavy (scripts/run.sh -H), -t timeout (default RUN_TIMEOUT; the cap at every tier), -b exit 2 means BLIND (a
+#   build or usage failure, or a nested gate or grader that exits 2 for BLIND). Runs <cmd> from the bot snapshot
+#   through the snapshot's scripts/run.sh.
 stage() {
     local name=$1 min=$2 limit=$RUN_TIMEOUT heavy=0 usage_blind=0 began rc verdict
     shift 2
@@ -57,11 +58,11 @@ stage() {
     shift
     (( $(rank "$GATE_TIER") >= $(rank "$min") )) || return 0
     stages=$(( stages + 1 ))
-    if [[ $GATE_TIER == full ]]; then heavy=1; limit=$HEAVY_TIMEOUT_MAX; fi
+    [[ $GATE_TIER == full ]] && heavy=1
     local flags=(-t "$limit")
     (( heavy )) && flags+=(-H)
     began=$(now)
-    (cd "$work/bots" && "$ROOT/scripts/run.sh" "${flags[@]}" -l "$logs/$name.log" -- "$@") 2> "$logs/$name.run"
+    (cd "$work/bots" && "$work/bots/scripts/run.sh" "${flags[@]}" -l "$logs/$name.log" -- "$@") 2> "$logs/$name.run"
     rc=$?
     verdict=$(verdict_of "$rc" "$usage_blind")
     echo "$verdict $name $(secs "$began" "$(now)")s"
@@ -70,8 +71,12 @@ stage() {
         BLIND) blind=$(( blind + 1 )) ;;
         *) failed=$(( failed + 1 )) ;;
     esac
-    tail -n 20 "$logs/$name.log" 2> /dev/null | sed 's/^/    /'
-    sed 's/^/    /' "$logs/$name.run"
+    # run.sh ends its log with the verdict line it also writes to stderr; the stderr file matters only without a log.
+    if [[ -s $logs/$name.log ]]; then
+        tail -n 20 "$logs/$name.log" | sed 's/^/    /'
+    else
+        sed 's/^/    /' "$logs/$name.run"
+    fi
 }
 
 # Tracked plus untracked-not-ignored, minus tracked files deleted in the worktree.
@@ -122,6 +127,9 @@ if ! { git -C "$ROOT" archive HEAD | tar -C "$work/bots" -xf -; } 2> "$logs/snap
     echo "gate: kept $work" >&2
     exit 2
 fi
+# From here on the verdict mapping is the committed one, like run.sh.
+# shellcheck source=lib/verdict.sh
+source "$work/bots/scripts/lib/verdict.sh"
 export TREE=$work/tree
 # Git in a copy must never find this repo above it.
 export GIT_CEILING_DIRECTORIES=$PG_TMP
@@ -137,9 +145,17 @@ if [[ $verdict != OK ]]; then
 fi
 
 # ADOPT: product stages below. One line per stage: stage <name> <tier-min> [-H] [-t secs] [-b] -- <cmd>. Commands run
-# from this repo's committed snapshot with TREE (the product snapshot) and GATE_TIER exported. Replace the example
-# line; scripts/lint.py --adoption fails while it stays.
-stage kv-example quick -b -- bash examples/kv-python/gate.sh "$TREE" "$GATE_TIER"
+# from this repo's committed snapshot with TREE (the product snapshot) and GATE_TIER exported, and read the product
+# only through "$TREE". These are the worked example's stages, the pattern to copy: unit and sim at quick, compile
+# and coverage-plants at harness, a heavy sweep at full. Replace them; scripts/lint.py --adoption fails while any
+# line here names examples/kv-python.
+stage unit quick -t 60 -- python3 -m unittest discover -s examples/kv-python/harness -p 'test_*.py'
+stage sim quick -t 60 -- python3 examples/kv-python/harness/sim.py --tree "$TREE" --seeds 200 --timeout 50
+stage compile harness -t 60 -- python3 -c 'import sys
+for f in sys.argv[1:]: compile(open(f).read(), f, "exec")' examples/kv-python/harness/*.py
+stage coverage-plants harness -t 240 -b -- bash scripts/coverage-plants.sh "$TREE"
+stage sweep full -H -t 300 -- python3 examples/kv-python/harness/sim.py --tree "$TREE" --seeds 2000 --start 200 \
+    --timeout 280
 # ADOPT: product stages above.
 
 if (( stages == 0 )); then

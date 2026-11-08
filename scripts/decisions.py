@@ -12,7 +12,8 @@
   scripts/decisions.py check              exit 1 on a malformed file or an unfilled skeleton placeholder
                                           (scripts/skeleton.py)
 
-Files are decisions/NNN-<slug>.md with a '# D-NNN: <title>' line. DECISIONS_DIR overrides the folder (tests).
+Files are decisions/NNN-<slug>.md with a '# D-NNN: <title>' line; check judges every *.md but README.md, so a
+misnamed or non-UTF-8 file is a problem, never skipped. DECISIONS_DIR overrides the folder (tests).
 Columns: id, status, decided_by, touches, title.
 """
 import os
@@ -20,7 +21,7 @@ import pathlib
 import re
 import sys
 
-from skeleton import placeholder_problems
+from skeleton import placeholder_problems, read_register, register_files
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DIR = pathlib.Path(os.environ.get("DECISIONS_DIR") or ROOT / "decisions")
@@ -31,23 +32,26 @@ REQUIRED = ("status", "decided_by", "touches", "revisit_when", "session")
 SESSION_TRIGGER = re.compile(r"\bsession-v?\d+\b", re.I)
 
 
-def placeholders(path):
-    """Lines still holding a skeleton placeholder (scripts/skeleton.py), frontmatter and body alike."""
-    return placeholder_problems(path.read_text())
+NAME = re.compile(r"\d+-.+\.md")
 
 
 def load(path):
-    text = path.read_text()
+    text, unreadable = read_register(path)
     m = re.match(r"---\n(.*?)\n---\n", text, re.S)
     fields = {k: v.strip() for k, v in re.findall(r"^(\w+):[ \t]*(.*)$", m.group(1), re.M)} if m else {}
     title = re.search(r"^# (D-\d+): (.*)$", text, re.M)
     fields["id"], fields["title"] = (title.group(1), title.group(2)) if title else (path.stem, "")
     fields["path"] = path
     fields["frontmatter"] = bool(m)
+    fields["unreadable"], fields["text"] = unreadable, text
     return fields
 
 
 def problems(d):
+    if d["unreadable"]:
+        return [d["unreadable"]]
+    if not NAME.fullmatch(d["path"].name):
+        return [f"file name {d['path'].name} is not NNN-<slug>.md"]
     if not d["frontmatter"]:
         return ["no --- frontmatter block"]
     out = [f"missing {k}" for k in REQUIRED if not d.get(k)]
@@ -65,7 +69,7 @@ def problems(d):
         out.append(f"confirmed with decided_by {d.get('decided_by')}: confirmation is the human ruling by name")
     if SESSION_TRIGGER.search(d.get("revisit_when", "")):
         out.append(f"revisit_when names a session ({d['revisit_when']!r}); name the event that should reopen it")
-    return out
+    return out + placeholder_problems(d["text"])
 
 
 def show(ds):
@@ -116,7 +120,7 @@ def brief(ds, key):
 
 
 def check(ds):
-    bad = [(d["path"].name, p) for d in ds for p in problems(d) + placeholders(d["path"])]
+    bad = [(d["path"].name, p) for d in ds for p in problems(d)]
     ids = [d["id"] for d in ds]
     bad += [(i, "duplicate id") for i in sorted({i for i in ids if ids.count(i) > 1})]
     for name, p in bad:
@@ -126,7 +130,7 @@ def check(ds):
 
 
 def main(args):
-    ds = sorted((load(p) for p in DIR.glob("[0-9]*.md")), key=lambda d: d["path"].name) if DIR.is_dir() else []
+    ds = [load(p) for p in register_files(DIR)]
     cmd = args[0] if args else "list"
     if cmd == "list":
         show(ds)

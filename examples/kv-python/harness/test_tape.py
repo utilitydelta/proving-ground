@@ -7,10 +7,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from loader import DEFAULT_TREE, load_product
+from loader import load_product, tree_from_env
 from sim import generate, run, worst_gap, write_tape
 
-TREE = Path(os.environ.get("TREE", DEFAULT_TREE))
+TREE = tree_from_env()
 HERE = Path(__file__).resolve().parent
 PLANT = HERE.parent / "plants" / "ack_before_fsync.patch"
 
@@ -57,6 +57,20 @@ class TapeReplay(unittest.TestCase):
         done = replay(self.tape, str(TREE))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("tape ran ", done.stdout)
+
+
+class TreeIsNamed(unittest.TestCase):
+    def test_suite_refuses_to_run_without_tree(self):
+        done = subprocess.run(
+            [sys.executable, "-m", "unittest", "test_torn_tail"],
+            cwd=HERE,
+            env={k: v for k, v in os.environ.items() if k != "TREE"},
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertNotEqual(done.returncode, 0, done.stderr)
+        self.assertIn("TREE is unset", done.stderr)
 
 
 # start, catching seeds, worst gap: seeds a run starting anywhere in the range needs to hit one

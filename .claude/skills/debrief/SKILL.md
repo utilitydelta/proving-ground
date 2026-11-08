@@ -1,6 +1,6 @@
 ---
 name: debrief
-description: Debrief with the human after a coding chunk or a finished Task or Factory run. Use when the human says debrief, wrap up, what did I do or how did I go, or ends a Watch session. Summarises what they built, walks findings, gives specific praise and two-way-door suggestions, collects verdicts on findings and rulings on decisions by name.
+description: Debrief with the human after a coding chunk or a finished Task or Factory run. Use when the human says debrief, wrap up, what did I do or how did I go, or ends a Watch session; also when picking a format beyond report.md, or when the human asks for a podcast, audio, diagram or video of results. Summarises what they built, walks findings, gives specific praise and two-way-door suggestions, collects verdicts on findings and rulings on decisions by name.
 ---
 
 # Debrief
@@ -25,12 +25,24 @@ In order, each short:
 5. **Tests worth promoting** to the human side.
 6. **Decisions to rule on.** `scripts/decisions.py provisional`, narrowed with `touches` to code the human wrote or read this chunk. One line each: the decision, who made it, the alternative.
 
-Long debrief: offer a format from `present`.
+Long debrief: offer a format from Formats below.
 
 ## Collect
 
 - Each finding: `adopted`, `rejected` or `noise`, written into its frontmatter. Update `INDEX.md` `## Precision` from `scripts/findings.py stats`. Once an adopted fix lands in the human repo, add `adopted_in: <sha>`. Never ask for anything bot-related in a human commit.
 - Each decision shown: `confirmed` or `overturned` by name, with a History line and the human's words. A new call the human makes is `decided_by: human-informed`. Silence or typing past confirms nothing; what the human leaves goes on the next `closeoff` agenda.
+
+## Formats
+
+Default is `report.md`. Offer more only when the content earns it; never produce media unasked, except a diagram when structure is the finding. Task, Tend and Factory reports use this table too.
+
+| Content | Use |
+|---|---|
+| The mental model behind a build the human will rewrite | `human-replay:podcast` |
+| A relationship or flow: time, control, data, ownership | `human-replay:diagram`. A list of facts is a table |
+| A mechanism that only makes sense in motion: a race, a recovery order | `human-replay:explainer-video` |
+
+Media goes in the session's `media/`. Git keeps small text a human reads (diagram sources, SVGs); audio, video and renders stay local and gitignored. `report.md` says what was made and the command that rebuilds it.
 
 ## End
 

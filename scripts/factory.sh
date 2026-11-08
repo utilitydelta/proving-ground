@@ -18,7 +18,14 @@
 # Every Claude process and job runs in a bwrap jail with HUMAN_REPO and FACTORY_READ_ONLY (project.env) read-only.
 # No bwrap: the runner refuses to start unless FACTORY_NO_JAIL=1.
 #
-# Stops on: <session-dir>/STOP, the deadline, `Status: done|blocked` in session-state.md, a weekly limit, 3 iterations
+# Each iteration runs under `timeout`: FACTORY_ITERATION_TIMEOUT seconds (project.env, default 5400), cut to the time
+# left before deadline + FACTORY_FINISH_GRACE (project.env, default 3600). A killed iteration is noted in progress.md.
+#
+# At the deadline no new job starts unless it carries `# finish: yes` in its first 10 lines. Running jobs without it go
+# back to pending; finish jobs run until done or until deadline + FACTORY_FINISH_GRACE. Then one finish iteration runs
+# (its prompt says the deadline passed and to complete finish) and the runner stops. Grace already spent: no iteration.
+#
+# Stops on: <session-dir>/STOP, the deadline (after the finish iteration), `Status: done|blocked` in session-state.md, a weekly limit, 3 iterations
 # in a row that leave session-state.md unchanged, or --max-iterations. Sleeps through a session limit when its reset
 # falls before the deadline. After every 3 units built the next iteration is a pause: the prompt says so and the skill
 # builds nothing new until a `- pause-...` line lands in `## Done`. A built unit in `## Done` whose units/<id>.md lacks
@@ -41,6 +48,9 @@ gap=0
 pause_every=3
 default_job_timeout=$HEAVY_TIMEOUT_MAX
 busy_backoff=${FACTORY_BUSY_BACKOFF:-60}
+iteration_timeout=${FACTORY_ITERATION_TIMEOUT:-5400}
+finish_grace=${FACTORY_FINISH_GRACE:-3600}
+finish_only=0
 while (( $# )); do
     case $1 in
         --until) until_expr=$2; shift 2 ;;
@@ -56,6 +66,8 @@ session=$(cd "$session" && pwd) || exit 2
 deadline=$(date -d "$until_expr" +%s) || exit 2
 (( deadline > $(date +%s) )) || { echo "deadline $until_expr is in the past" >&2; exit 2; }
 claude_bin=${CLAUDE_BIN:-claude}
+[[ $iteration_timeout =~ ^[0-9]+$ && $finish_grace =~ ^[0-9]+$ ]] \
+    || { echo "FACTORY_ITERATION_TIMEOUT and FACTORY_FINISH_GRACE take whole seconds" >&2; exit 2; }
 (( HEAVY_JOBS >= 1 )) || { echo "HEAVY_JOBS must be at least 1" >&2; exit 2; }
 # Started from inside a Claude Code session, the parent's session variables would leak into every iteration.
 for var in "${!CLAUDE_CODE_@}"; do unset "$var"; done
@@ -111,7 +123,18 @@ reset_epoch() {
 
 running_count() { local f=("$session"/jobs/running/*.sh); [[ -e ${f[0]} ]] && echo "${#f[@]}" || echo 0; }
 job_running() { compgen -G "$session/jobs/running/*.sh" > /dev/null; }
-job_pending() { compgen -G "$session/jobs/pending/*.sh" > /dev/null; }
+# The first pending job the worker may start: any, or past the deadline only one headed `# finish: yes`.
+next_pending() {
+    local f
+    for f in "$session"/jobs/pending/*.sh; do
+        [[ -e $f ]] || continue
+        (( finish_only )) && ! head -n 10 "$f" | grep -qE '^# finish: *yes' && continue
+        echo "$f"
+        return 0
+    done
+    return 1
+}
+job_pending() { next_pending > /dev/null; }
 
 job_timeout() {
     local t
@@ -165,9 +188,9 @@ start_job() {
         while job_pending || [[ -n $(jobs -pr) ]]; do
             if job_pending && (( $(running_count) < HEAVY_JOBS )) \
                 && (( $(date +%s) >= $(cat "$session/jobs/busy-until" 2> /dev/null || echo 0) )); then
-                next=("$session"/jobs/pending/*.sh)
-                name=$(basename "${next[0]}" .sh)
-                mv "${next[0]}" "$session/jobs/running/"
+                next=$(next_pending) || continue
+                name=$(basename "$next" .sh)
+                mv "$next" "$session/jobs/running/"
                 run_job "$name" &
             else
                 sleep 1
@@ -228,6 +251,42 @@ missing_records() {
     (( ${#ids[@]} )) && echo "${ids[*]}"
 }
 
+# iterate <n> <prompt>: one claude -p under the iteration timeout; sets code to its exit status.
+iterate() {
+    local n=$1 prompt=$2 limit left
+    out=$session/iterations/$(printf %04d "$n").jsonl
+    left=$(( deadline + finish_grace - $(date +%s) ))
+    limit=$(( iteration_timeout < left ? iteration_timeout : left ))
+    (( limit < 1 )) && limit=1
+    (cd "$ROOT" && "${scope[@]}" "${jail[@]}" timeout -k 30 "$limit" "$claude_bin" -p --model "$model" \
+        --permission-mode auto --permission-prompts none --output-format stream-json --verbose \
+        --forward-subagent-text "$prompt") > "$out" 2>&1
+    code=$?
+    if (( code == 124 || code == 137 )); then
+        note "iteration $n killed by its $limit s timeout (exit $code)"
+    fi
+}
+
+# Past the deadline: only `# finish: yes` jobs, then one finish iteration inside the grace, then stop.
+finish_run() {
+    local n=$1 grace_end=$(( deadline + finish_grace ))
+    note "deadline: only '# finish: yes' jobs run; one finish iteration, grace to $(date -d "@$grace_end" '+%a %H:%M:%S')"
+    stop_worker
+    finish_only=1
+    start_job
+    while [[ ! -e $session/STOP ]] && (( $(date +%s) < grace_end )) && { job_running || job_pending; }; do
+        start_job
+        sleep 1
+    done
+    [[ -e $session/STOP ]] && { note "stop: STOP file"; exit 0; }
+    (( $(date +%s) < grace_end )) || { note "stop: deadline, grace spent before the finish iteration"; exit 0; }
+    note "iteration $n (finish)"
+    iterate "$n" "Load the factory skill and run one iteration. Session: $session Deadline passed at $(date -d "@$deadline" '+%Y-%m-%d %H:%M %Z'): complete finish now and build nothing new; only jobs headed '# finish: yes' run."
+    note "iteration $n exit $code"
+    note "stop: deadline, finish iteration done"
+    exit 0
+}
+
 unchanged=0
 note "start, deadline $(date -d "@$deadline" '+%a %H:%M'), model $model, heavy jobs $HEAVY_JOBS"
 # A resumed session numbers on from its last transcript, so gzip never meets an existing name.
@@ -239,15 +298,14 @@ for f in "$session"/iterations/[0-9][0-9][0-9][0-9].jsonl*; do
 done
 for (( i = first; i < first + max_iterations; i++ )); do
     compgen -G "$session/iterations/*.jsonl" > /dev/null && gzip -q "$session"/iterations/*.jsonl
-    start_job
     [[ -e $session/STOP ]] && { note "stop: STOP file"; exit 0; }
-    (( $(date +%s) < deadline )) || { note "stop: deadline"; exit 0; }
+    (( $(date +%s) < deadline )) || finish_run "$i"
+    start_job
     if grep -qE '^Status: (done|blocked)' "$state" 2>/dev/null; then
         note "stop: $(grep -m1 -E '^Status:' "$state")"; exit 0
     fi
 
     before=$(sha256sum "$state" 2>/dev/null | cut -c1-16)
-    out=$session/iterations/$(printf %04d "$i").jsonl
     prompt="Load the factory skill and run one iteration. Session: $session Deadline: $(date -d "@$deadline" '+%Y-%m-%d %H:%M %Z')"
     read -r builds pauses < <(done_counts)
     if (( builds >= pause_every * (pauses + 1) )); then
@@ -256,9 +314,7 @@ for (( i = first; i < first + max_iterations; i++ )); do
     else
         note "iteration $i"
     fi
-    (cd "$ROOT" && "${scope[@]}" "${jail[@]}" "$claude_bin" -p --model "$model" --permission-mode auto \
-        --permission-prompts none --output-format stream-json --verbose --forward-subagent-text "$prompt") > "$out" 2>&1
-    code=$?
+    iterate "$i" "$prompt"
     summary=$(python3 - "$out" <<'PY'
 import json, sys
 cost = turns = None

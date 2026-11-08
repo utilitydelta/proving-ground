@@ -20,6 +20,8 @@
 #   FAIL <plant>         the check stayed green: the harness is blind to this bug
 #   BLIND <plant>        no check line, the patch does not apply, the check is red on the clean tree, or the check
 #                        could not judge (lib/verdict.sh: run.sh 75, 124, 137; shell 126, 127)
+# A plant no row of harness/coverage.tsv (COVERAGE overrides) names gets a warning line on stderr: its free-form check
+# grades it, not a product command. scripts/coverage-plants.sh is the grade that counts for coverage.
 # Exit as every gate does (lib/verdict.sh gate_exit): 0 every plant OK, 2 any BLIND (no plants at all, or a usage
 # error, counts), else 1. Work dirs live under one mktemp -d in PG_TMP, removed when every plant is OK and kept, with
 # the path on stderr, otherwise, so a tape or log can be read after a red run.
@@ -35,6 +37,11 @@ mkdir -p "${PG_TMP:=$root/.run/tmp}"
 export PG_TMP
 work=$(mktemp -d "$PG_TMP/plants.XXXXXX")
 echo "plants: tree $tree, work dir $work" >&2
+
+# Plants some coverage row names, as real paths: coverage-plants.sh grades those by the row's own command.
+table=${COVERAGE:-$root/harness/coverage.tsv}
+referenced=$(cd "$root" && awk -F'\t' 'NR > 1 && !/^#/ && $5 != "" { print $5 }' "$table" 2> /dev/null \
+    | while IFS= read -r p; do realpath -m -- "$p"; done)
 
 copy_tree() {
     mkdir -p "$1" && tar -C "$tree" --exclude=.git -cf - . | tar -C "$1" -xf -
@@ -79,6 +86,8 @@ for patch in "$plants_dir"/*.patch; do
     [[ -e $patch ]] || break
     count=$(( count + 1 ))
     name=$(basename "$patch" .patch)
+    grep -qxF -- "$(realpath -m -- "$patch")" <<< "$referenced" \
+        || echo "plants: warning: $name is not the plant of any coverage row in $table; only its # check: grades it" >&2
     dir=$work/$name
     check=$(header "$patch" check)
     limit=$(header "$patch" timeout)

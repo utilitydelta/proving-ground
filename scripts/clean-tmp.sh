@@ -3,8 +3,11 @@
 # output under RUN_DIR/out/ (.run/out/) and run and gate logs under RUN_DIR/logs/ (.run/logs/). Build caches
 # (.run/build/) stay: they are what makes the next build fast.
 #
-#   scripts/clean-tmp.sh [--older-than-hours N]      (default 24; 0 removes everything, running gates included)
+#   scripts/clean-tmp.sh [--all | --older-than-hours N]
 #
+# Default: entries untouched for 24 hours, so a gate or plant run in progress (its dir is minutes old) is never pulled
+# out from under it. --all (the same as --older-than-hours 0) removes every entry whatever its age: what `finish` runs
+# once nothing else is running in this clone, since a gate started meanwhile would lose its work dir.
 # Each entry is removed by its literal resolved path, and only when that path sits directly inside one of the three
 # roots; a symlink is unlinked, never followed. Prints each removal and a total. The no-rm-rf hook allows agents
 # .run/tmp and .run/out by literal path, so this script is the cleanup and nothing else needs a variable-built rm -r.
@@ -15,6 +18,7 @@ source "$(dirname "$0")/lib/env.sh"
 hours=24
 case ${1:-} in
     '') ;;
+    --all) (( $# == 1 )) || { sed -n 6p "$0" >&2; exit 2; }; hours=0 ;;
     --older-than-hours) [[ ${2:-} =~ ^[0-9]+$ ]] || { sed -n 6p "$0" >&2; exit 2; }; hours=$2 ;;
     *) sed -n 6p "$0" >&2; exit 2 ;;
 esac

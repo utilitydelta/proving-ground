@@ -47,7 +47,7 @@ A wide property range rarely draws the edge: give the edge a fixed case. A symbo
 
 ## Which rows
 
-`scripts/affected.sh [base]` prints the `harness/coverage.tsv` commands for the paths a human diff touches; `--run` runs each through `run.sh` with `TREE` set to the live `HUMAN_REPO`. Harness code reads one tree variable, `TREE`: the gate and `plants.sh` set it to a snapshot or a planted copy, `affected.sh` to the live tree. A command with a hard-coded path grades the wrong code. Every new row runs at every gate config (`AGENTS.md` `## Project`) before it counts: rows green at the round configs go red at the odd ones. A changed area with no row is a coverage gap for Tend or the next Task.
+`scripts/affected.sh [base] [--run] [--tier quick|harness|full]` prints the `harness/coverage.tsv` rows for the paths a human diff touches, up to the quick tier unless `--tier` raises it; `--run` runs each through `run.sh` with `TREE` set to the live `HUMAN_REPO`, and a diff no row matches is `BLIND affected`, exit 2. Harness code reads one tree variable, `TREE`: the gate, `coverage-plants.sh` and `plants.sh` set it to a snapshot or a planted copy, `affected.sh` to the live tree. A command with a hard-coded path grades the wrong code. Every new row runs at every gate config (`AGENTS.md` `## Project`) before it counts: rows green at the round configs go red at the odd ones. A changed area with no row is a coverage gap for Tend or the next Task.
 
 ## Checks on checks
 

@@ -1,10 +1,8 @@
-import os
 import unittest
-from pathlib import Path
 
-from loader import DEFAULT_TREE, load_product
+from loader import load_product, tree_from_env
 
-kv = load_product(Path(os.environ.get("TREE", DEFAULT_TREE)))
+kv = load_product(tree_from_env())
 
 
 def perform(core, effects, log: bytearray, completions=("append", "fsync")) -> list[int]:

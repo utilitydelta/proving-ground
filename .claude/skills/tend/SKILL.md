@@ -28,7 +28,7 @@ In order. Log each removal with its reason before making it. Heavy passes run th
 11. **Intent audit.** Every line in every session's `human.md` since the last Tend: built (where), queued, decided (which id), unruled, or lost. Lost ones go to the roadmap and the report.
 12. **Skills.** Findings marked `noise` or `rejected` since the last Tend: a pattern rewrites the skill that produced them. A detector that never confirms anything is a removal candidate. Prune skills to rules, not lesson logs: one clause of evidence per rule, under the `scripts/lint.py` cap; merge or cut before adding.
 13. **Memory.** Rules that live only in agent memory files (anything outside git) move into `AGENTS.md`, a skill or a decision.
-14. **Index.** Rebuild `harness/coverage.tsv` rows from the tree, every row with a measured `budget_s` and a plant. Paste `scripts/decisions.py stats` and `scripts/findings.py stats`, dated, into `INDEX.md` `## Precision`.
+14. **Index.** Rebuild `harness/coverage.tsv` rows from the tree, every row with a bare `$TREE` command, a measured `budget_s` and a plant the harness tier proves; a plant no row names (the harness tier warns) gets a row or goes. Paste `scripts/decisions.py stats` and `scripts/findings.py stats`, dated, into `INDEX.md` `## Precision`.
 
 ## End
 

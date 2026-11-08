@@ -47,4 +47,4 @@ AskUserQuestion per `AGENTS.md` Interrupting; file the answer as `human-asked`. 
 
 ## End
 
-Run `finish`. `report.md`: what was built, the weight and why, what it proves and cannot prove, findings, new decision ids with who made each, prior-system deltas, tests worth promoting. `present` if more is earned.
+Run `finish`. `report.md`: what was built, the weight and why, what it proves and cannot prove, findings, new decision ids with who made each, prior-system deltas, tests worth promoting. A format beyond `report.md` only if earned (`debrief` Formats).

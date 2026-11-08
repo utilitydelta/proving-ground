@@ -167,7 +167,12 @@ class Registers(unittest.TestCase):
         self.assert_risk_problem(risk(status="parked"), "status 'parked'")
         # open and proposed are the queue: any score passes.
         self.assert_risk_ok(risk(lik=5, con=5, status="open"), "open at 25: ")
-        self.assert_risk_ok(risk(lik=4, con=4, status="proposed"), "proposed at 16: ")
+        self.assert_risk_ok(risk(lik=4, con=4, status="proposed", control="crc on read"), "proposed at 16: ")
+        # Status and control agree at any score: controlled and proposed name a control, open may not.
+        self.assert_risk_problem(risk(lik=1, con=2, status="proposed"), "proposed with control: none")
+        self.assert_risk_problem(risk(lik=1, con=2, status="controlled"), "controlled with control: none")
+        self.assert_risk_problem(risk(lik=1, con=2, status="controlled", control=" None "), "controlled with control")
+        self.assert_risk_ok(risk(lik=1, con=2, status="controlled", control="fsync before ack"), "controlled at 2: ")
         # 12 and up, controlled or accepted: a control and an existing decision.
         self.assert_risk_problem(risk(lik=4, con=4, status="controlled", decision="D-003"), "with control: none")
         self.assert_risk_problem(risk(lik=4, con=4, status="accepted", decision="D-003"), "with control: none")
@@ -217,6 +222,35 @@ class Registers(unittest.TestCase):
                                    "session-v1", "2026-01-01"], capture_output=True, text=True).stdout
         self.assert_finding_problem(skeleton, "skeleton placeholder")
 
+    def test_registers_check_every_md_but_readme(self):
+        cases = [("decisions.py", self.decisions, "001-x.md", decision(), ["D-1-x.md", "x.md", "001_x.md"]),
+                 ("risks.py", self.risks, "R001-x.md", risk(), ["r001-x.md", "001-x.md", "Rx.md"])]
+        for script, folder, good, text, bad_names in cases:
+            for bad in bad_names:
+                with self.subTest(script=script, name=bad):
+                    for p in folder.glob("*.md"):
+                        p.unlink()
+                    self.write(folder, "README.md", "# Register\n")
+                    self.write(folder, good, text)
+                    self.assertEqual(self.run_script(script, "check").returncode, 0, script)
+                    self.write(folder, bad, text)
+                    out = self.run_script(script, "check")
+                    self.assertEqual(out.returncode, 1, out.stdout)
+                    self.assertIn(f"{bad}: file name", out.stdout)
+        self.write_finding("001-x.md", finding())
+        self.write_finding("README.md", "# Findings\n")
+        self.assertEqual(self.run_script("findings.py", "check").returncode, 0)
+        self.write_finding("lost-ack.md", finding())
+        out = self.run_script("findings.py", "check")
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("lost-ack.md: file name", out.stdout)
+
+    def test_registers_report_undecodable_files(self):
+        (self.decisions / "001-x.md").write_bytes(b"---\nstatus: \xff\xfe\n---\n")
+        out = self.run_script("decisions.py", "check")
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("001-x.md: not UTF-8", out.stdout)
+
     def test_findings_stats_rows(self):
         self.write_finding("001-a.md", finding("regression", "open"))
         self.write_finding("002-b.md", finding("regression", "adopted"))
@@ -238,6 +272,9 @@ class Registers(unittest.TestCase):
         self.assertEqual(opened, ["R003"])
 
 
+COVERAGE_HEADER = "glob\tcommand\ttier\tbudget_s\tplant\n"
+
+
 class Scaffolding(unittest.TestCase):
     """new-id.sh, new-session.sh and lint.py in a throwaway copy of the scripts, so they find their own root."""
 
@@ -246,6 +283,9 @@ class Scaffolding(unittest.TestCase):
         shutil.copytree(SCRIPTS, self.root / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
         (self.root / "project.env").write_text("HUMAN_REPO=../product\nSCRATCH_BUDGET=1K\n")
         (self.root / "sessions").mkdir()
+        (self.root / "harness").mkdir()
+        (self.root / "harness" / "coverage.tsv").write_text(COVERAGE_HEADER + "src/*.py\tpython3 t.py --tree \"$TREE\"\t"
+                                                            "quick\t1\t\n")
         self.env = dict(os.environ, RUN_DIR=str(self.root / ".run"))
         for key in ("DECISIONS_DIR", "RISKS_DIR", "HUMAN_REPO", "PG_TMP"):
             self.env.pop(key, None)
@@ -344,6 +384,22 @@ class Scaffolding(unittest.TestCase):
     def git(self, *args):
         subprocess.run(["git", "-C", str(self.root), *args], check=True, capture_output=True)
 
+    def test_lint_fails_when_a_register_script_crashes(self):
+        lint = [sys.executable, str(self.root / "scripts" / "lint.py")]
+        self.assertEqual(subprocess.run(lint, capture_output=True).returncode, 0)
+        risks = self.root / "scripts" / "risks.py"
+        good = risks.read_text()
+        risks.write_text(good + "\ndef broken(:\n")
+        out = subprocess.run(lint, capture_output=True, text=True)
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertRegex(out.stderr, r"risks\.py check exited 1: .*SyntaxError")
+        risks.write_text(good)
+        (self.root / "decisions").mkdir()
+        (self.root / "decisions" / "001-x.md").write_bytes(b"---\nstatus: \xff\n---\n# D-001: x\n")
+        out = subprocess.run(lint, capture_output=True, text=True)
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertIn("decisions.py check exited 1", out.stderr)
+
     def test_lint_frozen_sessions(self):
         lint = [sys.executable, str(self.root / "scripts" / "lint.py")]
         done = self.root / "sessions" / "session-v1-task-done"
@@ -401,27 +457,65 @@ class Scaffolding(unittest.TestCase):
 
     def test_lint_coverage_and_plants(self):
         lint = [sys.executable, str(self.root / "scripts" / "lint.py")]
+        table = self.root / "harness" / "coverage.tsv"
         plants = self.root / "harness" / "py" / "plants"
         plants.mkdir(parents=True)
         (plants / "good.patch").write_text("# Breaks x.\n# check: false\ndiff --git a/x b/x\n")
+        (plants / "row-graded.patch").write_text("# Breaks z; its row's command is the check.\ndiff --git a/z b/z\n")
         rows = ["glob\tcommand\ttier\tbudget_s\tplant",
                 "# commented\tanything\tnope\tx\tmissing.patch",
                 "src/*.py\tpython3 t.py --tree \"$TREE\"\ttargeted\t20\tharness/py/plants/good.patch",
-                "src/*.py\tpython3 u.py\tquick\t1.5\t"]
-        (self.root / "harness" / "coverage.tsv").write_text("\n".join(rows) + "\n")
+                "src/*.py\tpython3 u.py --tree ${TREE}/src\tquick\t1.5\tharness/py/plants/row-graded.patch",
+                "src/*.py\tmake -C \"$TREE\" test\tquick\t1\t"]
+        table.write_text("\n".join(rows) + "\n")
         out = subprocess.run(lint, capture_output=True, text=True)
         self.assertEqual(out.returncode, 0, out.stderr)
-        rows += ["src/*.py\tpython3 v.py\tslow\tabout 20\tharness/py/plants/gone.patch", "too\tfew"]
-        (self.root / "harness" / "coverage.tsv").write_text("\n".join(rows) + "\n")
+        rows += ["src/*.py\tpython3 v.py --tree $TREE\tslow\tabout 20\tharness/py/plants/gone.patch", "too\tfew",
+                 "src/*.py\tpython3 w.py --tree examples/kv/product\tquick\t1\t",
+                 "src/*.py\tscripts/run.sh -t 60 -- python3 x.py --tree \"$TREE\"\tquick\t1\t"]
+        table.write_text("\n".join(rows) + "\n")
         (plants / "nocheck.patch").write_text("# Breaks y.\ndiff --git a/y b/y\n# check: after the diff\n")
         out = subprocess.run(lint, capture_output=True, text=True)
         self.assertEqual(out.returncode, 1)
-        for expected in ("coverage.tsv:5: tier 'slow'", "coverage.tsv:5: budget_s 'about 20'",
-                         "coverage.tsv:5: plant 'harness/py/plants/gone.patch'", "coverage.tsv:6: 2 columns",
+        for expected in ("coverage.tsv:6: tier 'slow'", "coverage.tsv:6: budget_s 'about 20'",
+                         "coverage.tsv:6: plant 'harness/py/plants/gone.patch'", "coverage.tsv:7: 2 columns",
+                         "coverage.tsv:8: command does not read $TREE",
+                         "coverage.tsv:9: command wraps scripts/run.sh",
                          "harness/py/plants/nocheck.patch: no '# check: <command>' line"):
             self.assertIn(expected, out.stderr)
-        self.assertNotIn("coverage.tsv:2", out.stderr)
-        self.assertNotIn("good.patch", out.stderr)
+        for absent in ("coverage.tsv:2", "coverage.tsv:3", "coverage.tsv:4", "coverage.tsv:5", "good.patch",
+                       "row-graded.patch"):
+            self.assertNotIn(absent, out.stderr)
+        # The table must exist and hold a data row: rows are what the harness tier grades.
+        for text in (None, "glob\tcommand\ttier\tbudget_s\tplant\n# a comment\n\n"):
+            with self.subTest(table=text):
+                table.unlink(missing_ok=True)
+                if text is not None:
+                    table.write_text(text)
+                for p in plants.glob("nocheck.patch"):
+                    p.unlink()
+                (plants / "row-graded.patch").write_text("# x\n# check: false\ndiff --git a/z b/z\n")
+                out = subprocess.run(lint, capture_output=True, text=True)
+                self.assertEqual(out.returncode, 1, out.stderr)
+                self.assertIn("harness/coverage.tsv: " + ("missing" if text is None else "no data rows"), out.stderr)
+
+    def test_clean_tmp_default_ages_out_and_all_clears(self):
+        run = self.root / ".run"
+        for rel in ("tmp/gate.old", "tmp/gate.new", "out/x-old", "logs/gate-new", "build/pycache"):
+            (run / rel).mkdir(parents=True)
+        day_old = __import__("time").time() - 25 * 3600
+        for rel in ("tmp/gate.old", "out/x-old", "build/pycache"):
+            os.utime(run / rel, (day_old, day_old))
+        env = dict(self.env, PG_TMP=str(run / "tmp"))
+        out = subprocess.run([str(self.root / "scripts" / "clean-tmp.sh")], capture_output=True, text=True, env=env)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        left = sorted(str(p.relative_to(run)) for p in run.glob("*/*"))
+        self.assertEqual(left, ["build/pycache", "logs/gate-new", "tmp/gate.new"])
+        out = subprocess.run([str(self.root / "scripts" / "clean-tmp.sh"), "--all"], capture_output=True, text=True,
+                             env=env)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(sorted(str(p.relative_to(run)) for p in run.glob("*/*")), ["build/pycache"])
+        self.assertIn("clean-tmp: 2 removed", out.stdout)
 
     def test_changed_tooling(self):
         script = [str(self.root / "scripts" / "changed-tooling.sh")]
@@ -452,6 +546,10 @@ class Scaffolding(unittest.TestCase):
         (docs / "workload-shapes.md").write_text("| Shape |\n|---|\n| EXAMPLE ROW: ingest |\n")
         (docs / "ARCHITECTURE.md").write_text("| Subsystem | Location | State |\n|---|---|---|\n"
                                               "| Gate | `scripts/gate.sh <tree> [quick\\|full]` | Stub: example only |\n")
+        # Its own gate.sh, never the repo's: adopting the real one must not break this test.
+        gate = self.root / "scripts" / "gate.sh"
+        gate.write_text("#!/usr/bin/env bash\n# ADOPT: product stages below.\n"
+                        "stage unit quick -- python3 examples/kv-python/harness/t.py --tree \"$TREE\"\n")
         self.git("init", "-q")
         self.git("remote", "add", "origin", "git@github.com:owner/template.git")
         out = subprocess.run(lint, capture_output=True, text=True, env=self.env)
@@ -459,10 +557,11 @@ class Scaffolding(unittest.TestCase):
         for expected in ("HUMAN_REPO still points into examples/", "AGENTS.md:5: ## Project still holds template text",
                          "AGENTS.md:6: ## Project still holds template text",
                          "docs/workload-shapes.md still holds its EXAMPLE ROW marker",
-                         "docs/ARCHITECTURE.md:3: Gate row still says Stub", "scripts/gate.sh:",
+                         "docs/ARCHITECTURE.md:3: Gate row still says Stub", "scripts/gate.sh:3:",
                          "git origin git@github.com:owner/template.git is the template"):
             self.assertIn(expected, out.stderr)
         self.assertNotIn("AGENTS.md:10", out.stderr)
+        self.assertNotIn("references examples", out.stderr, "HUMAN_REPO in examples/ already says it")
         human = self.root / "product"
         human.mkdir()
         self.git("remote", "set-url", "origin", "git@github.com:owner/template-fork.git")
@@ -471,13 +570,33 @@ class Scaffolding(unittest.TestCase):
                                              "- **Workload shapes:** docs/workload-shapes.md\n")
         (docs / "workload-shapes.md").write_text("| Shape |\n|---|\n| Ingest |\n")
         (docs / "ARCHITECTURE.md").write_text("| Gate | `scripts/gate.sh` | Working: unit, sim |\n")
-        gate = self.root / "scripts" / "gate.sh"
         gate.write_text("#!/usr/bin/env bash\n# was: stage kv-example quick -- examples/kv-python/gate.sh\n"
                         "stage unit quick -- python3 harness/t.py --tree \"$TREE\"\n")
         out = subprocess.run(lint, capture_output=True, text=True, env=self.env)
         self.assertEqual(out.returncode, 0, out.stderr)
         gate.write_text(gate.read_text() + "  stage kv quick -- bash examples/kv-python/gate.sh\n")
         self.assertIn("scripts/gate.sh:4:", subprocess.run(lint, capture_output=True, text=True, env=self.env).stderr)
+        gate.write_text("#!/usr/bin/env bash\n")
+        # Leftover pointers at the example, outside examples/ and outside the README's Adopting it steps.
+        (self.root / "README.md").write_text("# T\n\n## Adopting it\n\n1. Delete `examples/`.\n\n## Map\n\n"
+                                             "See examples/kv-python.\n")
+        (docs / "ARCHITECTURE.md").write_text("| Gate | `scripts/gate.sh` | Working |\n"
+                                              "| Worked example | `examples/kv-python/` | Delete |\n")
+        (self.root / "harness" / "README.md").write_text("Pattern: examples/kv-python/harness.\n")
+        (self.root / "harness" / "coverage.tsv").write_text("glob\tcommand\n# examples/ in a comment\n")
+        (self.root / "INDEX.md").write_text("| quick | 0.48 s (lint 0.06, kv-example 0.42) |\n")
+        (self.root / "examples" / "kv" / "README.md").write_text("examples/kv inside examples/ is fine\n")
+        out = subprocess.run(lint, capture_output=True, text=True, env=self.env)
+        self.assertEqual(out.returncode, 1, out.stderr)
+        for expected in ("README.md:9: references examples/", "docs/ARCHITECTURE.md:2: references examples/",
+                         "harness/README.md:1: references examples/", "INDEX.md:1: references examples/"):
+            self.assertIn(expected, out.stderr)
+        for absent in ("README.md:5:", "coverage.tsv", "examples/kv/README.md", "scripts/lint.py"):
+            self.assertNotIn(absent, out.stderr)
+        (self.root / "README.md").write_text("# T\n")
+        (docs / "ARCHITECTURE.md").write_text("| Gate | `scripts/gate.sh` | Working |\n")
+        (self.root / "harness" / "README.md").write_text("Pattern: harness/py.\n")
+        (self.root / "INDEX.md").write_text("| quick | 0.48 s |\n")
         # Workload shapes: none, said plainly, needs no file.
         (docs / "workload-shapes.md").unlink()
         (self.root / "AGENTS.md").write_text("## Project\n\n- **Workload shapes:** none\n")
@@ -530,11 +649,28 @@ class Affected(unittest.TestCase):
         (self.human / "src" / "net.py").write_text("changed\n")
         out = self.affected()
         self.assertEqual(out.stdout.splitlines()[0], f"TREE={self.human} bash -c " + "test\\ -f\\ \\\"\\$TREE/src/net.py\\\"")
+        for args in (["--run"], ["HEAD", "--run"], ["--run", "HEAD"]):
+            with self.subTest(args=args):
+                out = self.affected(*args)
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                lines = out.stdout.splitlines()
+                self.assertRegex(lines[0], r'^OK \d+\.\d\ds test -f "\$TREE/src/net.py"$')
+                self.assertRegex(lines[1], r"^FAIL \d+\.\d\ds false$")
+
+    def test_run_with_a_path_no_row_covers_is_blind(self):
+        rows = ["glob\tcommand\ttier\tbudget_s\tplant", "src/*.py\ttrue\ttargeted\t1\t",
+                "README.md\ttrue\tfull\t1\t"]
+        (self.root / "harness" / "coverage.tsv").write_text("\n".join(rows) + "\n")
+        (self.human / "src" / "net.py").write_text("changed\n")
+        (self.human / "README.md").write_text("changed\n")
         out = self.affected("--run")
-        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
-        lines = out.stdout.splitlines()
-        self.assertRegex(lines[0], r'^OK \d+\.\d\ds test -f "\$TREE/src/net.py"$')
-        self.assertRegex(lines[1], r"^FAIL \d+\.\d\ds false$")
+        self.assertEqual(out.returncode, 2, out.stdout + out.stderr)
+        self.assertRegex(out.stdout, r"(?m)^OK \d+\.\d\ds true$")
+        self.assertRegex(out.stdout, r"(?m)^BLIND affected \(1 changed path\(s\) no row up to tier quick covers: "
+                                     r"README.md\)$")
+        out = self.affected("--run", "--tier", "full")
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertNotIn("BLIND", out.stdout)
 
     def test_nothing_changed(self):
         out = self.affected()
@@ -544,11 +680,16 @@ class Affected(unittest.TestCase):
     def test_uncommitted_change_targeted_first_deduped(self):
         (self.human / "src" / "store" / "log.py").write_text("y\n")
         out = self.affected()
+        self.assertEqual(out.stdout.splitlines(), self.printed("store-test", "store-quick"), out.stderr)
+        out = self.affected("--tier", "harness")
+        self.assertEqual(out.stdout.splitlines(), self.printed("store-test", "store-quick"), out.stderr)
+        out = self.affected("--tier", "full", "HEAD")
         self.assertEqual(out.stdout.splitlines(), self.printed("store-test", "store-quick", "full-suite"), out.stderr)
+        self.assertEqual(self.affected("--tier", "slow").returncode, 2)
 
     def test_untracked_file_and_single_segment_star(self):
         (self.human / "src" / "dns.py").write_text("new\n")
-        self.assertEqual(self.affected().stdout.splitlines(), self.printed("net-test", "full-suite"))
+        self.assertEqual(self.affected("--tier", "full").stdout.splitlines(), self.printed("net-test", "full-suite"))
 
     def test_since_base_ref_and_no_match(self):
         (self.human / "README.md").write_text("y\n")
@@ -557,7 +698,7 @@ class Affected(unittest.TestCase):
         self.assertIn("nothing changed", self.affected().stderr)
         out = self.affected("HEAD~1")
         self.assertEqual(out.stdout, "")
-        self.assertIn("no coverage row matches the 1 changed path(s); run the quick gate", out.stderr)
+        self.assertIn("no coverage row up to tier quick matches the 1 changed path(s); run the quick gate", out.stderr)
 
 
 if __name__ == "__main__":

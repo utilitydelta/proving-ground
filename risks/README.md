@@ -40,9 +40,9 @@ Adapt the consequence column to the product's worst outcomes when adopting; keep
 - `open`: scored, nothing decided. `proposed`: a control is designed, not built.
 - `controlled`: the control exists and runs. `accepted`: the human accepted the risk by name.
 
-A risk at 12 or more with no control yet is still filed today: `status: open` or `proposed`, `control: none` or the design, and `decision:` pointing at a decision with `status: open` that names the control question. It shows in `scripts/risks.py open` until it is answered. Never mark it `accepted` to quiet the list.
+A risk at 12 or more with no control yet is still filed today: `status: open` with `control: none`, or `proposed` with the design, and `decision:` pointing at a decision with `status: open` that names the control question. It shows in `scripts/risks.py open` until it is answered. Never mark it `accepted` to quiet the list.
 
-`scripts/risks.py check` refuses a `controlled` or `accepted` risk scored 12 or more unless `control:` names a real control (not `none`) and `decision:` points at a decision whose status is `decided` or `confirmed`.
+`scripts/risks.py check` reads every `*.md` here except this README. It refuses a `controlled` or `proposed` risk whose `control:` is `none`; only `open` may have none. A `controlled` or `accepted` risk scored 12 or more also needs a real control and a `decision:` whose status is `decided` or `confirmed`.
 
 ## Scoring notes
 

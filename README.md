@@ -48,15 +48,24 @@ Skills here name plugin skills by full name (`build-method:writing-tests`) and n
    gh repo create <name> --private --template utilitydelta/proving-ground --clone
    ```
    Or clone it and run `git remote set-url origin <your repo>`. `scripts/push.sh` refuses to push to the template.
-2. Fill `project.env` (paths, read-only dirs, run caps) and every `<...>` in the `## Project` section of `AGENTS.md`. The human replaces the example row in `docs/workload-shapes.md` with real shapes, or the file goes and `## Project` says none.
-3. `scripts/hooks/install.sh`. The Claude Code hooks (`.claude/settings.json`) refuse writes, installs and in-tree builds under the human repo, and recursive deletes outside session scratch.
+2. Fill `project.env` (paths, read-only dirs, run caps) and every `<...>` in the `## Project` section of `AGENTS.md`. Workload shapes: the human either deletes `docs/workload-shapes.md` and `## Project` says none, or replaces its `EXAMPLE ROW` with real shapes.
+3. `scripts/hooks/install.sh`. The Claude Code hooks (`.claude/settings.json`) refuse common write forms aimed at the human repo and recursive deletes outside session scratch. They are best effort; the Factory's bwrap jail is the hard boundary, and an OS-level sandbox is worth considering for interactive sessions.
 4. Load the `task` skill with "build the first harness and the gate". It creates `session-v1`, so the decisions the first harness forces have a session to land in.
-5. In that session, write the product stages in `scripts/gate.sh` under `# ADOPT: product stages below`; the header holds the contract. Until then the stub prints BLIND and exits 2 for any tree but the example's.
-6. Add harness workspaces under `harness/<language>/`. They import the product from `$TREE` at run time; `harness/README.md` has a recipe per ecosystem, the `coverage.tsv` columns and the plant format. Add the first plant with `scripts/new-plant.sh`.
-7. Delete the example: `examples/`, the sample-records links in `decisions/README.md` and `risks/README.md`, the line in `scripts/gate.sh` that delegates to the example, and the example's rows in `harness/coverage.tsv`. Set the Gate row in `docs/ARCHITECTURE.md` to what your gate runs.
-8. Done when `scripts/lint.py --adoption` passes. It fails on any `<...>` left in `## Project`, the `EXAMPLE ROW` still in `docs/workload-shapes.md`, the ARCHITECTURE Gate row still saying `Stub`, or origin still pointing at the template.
+5. In that session, replace the example's `stage` lines in the `# ADOPT: product stages below` block of `scripts/gate.sh` with your own; the script header holds the contract. Until you do, the gate runs the kv example's checks against whatever tree you pass it, and those verdicts say nothing about your product.
+6. Add harness workspaces under `harness/<language>/`. They import the product from `$TREE` at run time; `harness/README.md` has a recipe per ecosystem, the `coverage.tsv` columns and the plant format. Add the first plant with `scripts/new-plant.sh` and its coverage row in the same commit.
+7. Delete the example, all of it:
+   - `examples/`;
+   - the kv `stage` lines in the ADOPT block of `scripts/gate.sh`;
+   - the kv rows in `harness/coverage.tsv`;
+   - the `Worked example` row in `docs/ARCHITECTURE.md` (and set its Gate row to what your gate runs);
+   - the `examples/` pointers in `harness/README.md`;
+   - the example's gate rows in `INDEX.md` `## Tier budgets`, re-measured from your own gate;
+   - the sample-records links in `decisions/README.md` and `risks/README.md`.
+8. Done when `scripts/lint.py --adoption` passes. It fails on any `<...>` left in `## Project`, `HUMAN_REPO` still pointing into `examples/`, the `EXAMPLE ROW` still in `docs/workload-shapes.md`, the ARCHITECTURE Gate row still saying `Stub`, an `examples/` reference left outside `examples/` (this section excepted), or origin still pointing at the template.
 
-`examples/kv-python/` is a worked example: a toy key-value store as the "human" code, a seeded simulator with a reference model, a checker, planted bugs the checker catches, and a gate. Read it before writing your first harness.
+Trials and CI clones set `HEAVY_DIR` to a private dir. Heavy slots are machine-wide by default, so a throwaway clone would otherwise queue behind, or block, real work on the same machine.
+
+`examples/kv-python/` is a worked example: a toy key-value store as the "human" code, a seeded simulator with a reference model, a checker, planted bugs the checker catches, and the gate stages in `scripts/gate.sh` that run them. Read it before writing your first harness.
 
 ## Week one
 

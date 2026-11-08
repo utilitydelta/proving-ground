@@ -5,7 +5,7 @@ description: Factory mode, one iteration of an unattended build-out. Use when th
 
 # Factory
 
-`scripts/factory.sh <session> --until <deadline>` is a bash loop: a fresh `claude -p` per iteration, queued jobs run between iterations with no Claude process alive, sleeps through usage limits. It needs Linux, bwrap (the jail that mounts the human repo read-only) and Claude Code. Long interactive orchestrators stall at every quota hit and die with their parent. Here the disk is the orchestrator's memory and every iteration is disposable.
+`scripts/factory.sh <session> --until <deadline>` is a bash loop: a fresh `claude -p` per iteration under `timeout` (`FACTORY_ITERATION_TIMEOUT`), queued jobs run between iterations with no Claude process alive, sleeps through usage limits. It needs Linux, bwrap (the jail that mounts the human repo read-only) and Claude Code. Long interactive orchestrators stall at every quota hit and die with their parent. Here the disk is the orchestrator's memory and every iteration is disposable.
 
 You orchestrate one iteration. Nobody is at the terminal. Everything waits for `report.md`.
 
@@ -17,7 +17,7 @@ Load `task` and follow its Build section. Each unit gets a weight (`AGENTS.md` W
 
 1. Read `session-state.md`, the tail of `log.md`, and every `jobs/done/*.out` and `.exit` newer than the last iteration line.
 2. Human repo HEAD moved since the `human head:` line? Rebase lead onto it. Conflict: `Status: blocked` with the files, exit.
-3. Under 30 minutes to the deadline: run `finish`. It queues the harness and full gates as jobs and exits; the iteration that reads their results completes `finish`, sets `Status: done` and exits.
+3. Under 30 minutes to the deadline: run `finish`. It queues the harness and full gates as `# finish: yes` jobs and exits; the iteration that reads their results completes `finish`, sets `Status: done` and exits. Past the deadline the runner allows `FACTORY_FINISH_GRACE`: `# finish: yes` jobs complete and one final iteration runs to complete `finish`. Nothing else starts.
 4. Prompt says `Pause iteration`: run the pause (below), go to 7. Otherwise take the first unit in `## Queue` not in `## Waiting` whose `job:` is `none` or has its `.out`. No such unit:
    - some unit waits on a job: exit without touching state; the runner runs the job and starts the next iteration;
    - every remaining unit waits on a door: follow Doors.
@@ -40,13 +40,9 @@ Load `task` and follow its Build section. Each unit gets a weight (`AGENTS.md` W
 
 Anything heavy (past `RUN_TIMEOUT`: harness and full gate, sweeps, whole-folder mutants, fuzz, proofs, soaks) is a job, never a wait. An agent waiting on a long run holds its context past the cache lifetime and pays to rebuild it.
 
-```bash
-# jobs/pending/<unit>-<what>.sh
-# timeout: 1800
-scripts/gate.sh ../lead full
-```
+One job file per run, in `jobs/pending/` (shape: `references/templates.md`). Its `# timeout:` header sets the limit; then one command, output to stdout, exiting with its real status. Jobs share `scripts/run.sh` heavy slots with everything else on the machine; a job that finds the slots busy is requeued, not failed. Record the job name on the unit's queue line and move on or exit.
 
-The header sets the limit; then one command, output to stdout, exiting with its real status, never a closing `exit 0`. Jobs share `scripts/run.sh` heavy slots with everything else on the machine; a job that finds the slots busy is requeued, not failed. Record the job name on the unit's queue line and move on or exit.
+An iteration is killed at `FACTORY_ITERATION_TIMEOUT`. State written at each stage boundary is what survives; work between boundaries is redone.
 
 Every subagent brief adds to the `fast-feedback` brief items: inline runs stop at the quick tier, anything heavier comes back as a job command.
 
@@ -69,20 +65,7 @@ A one-way door becomes at most three variants on lead branches `<unit>-<variant>
 
 ## session-state.md
 
-```markdown
-Status: building
-human head: <sha>
-lead head: <sha>
-
-## Queue
-- <unit-id> <one line> | weight: <full|middle|plain> | stage: <stage> | job: <name or none>
-
-## Waiting
-- <unit-id> D-NNN: <variants>
-
-## Done
-- <unit-id> lead <sha>
-```
+Status line, `human head:`, `lead head:`, then `## Queue`, `## Waiting`, `## Done`; template in `references/templates.md`. Queue lines carry unit id, weight, stage and job.
 
 `Status: done` or `blocked` stops the runner. Three iterations in a row that leave this file unchanged stop it too.
 

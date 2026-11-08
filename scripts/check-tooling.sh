@@ -6,10 +6,10 @@
 #   scripts/check-tooling.sh [quick|harness]
 #
 # quick: `bash -n` of every shell script, py_compile of every Python script, test_ledgers.py, test_hooks.sh,
-# test_plants.sh. harness adds test_factory.sh (Linux only: bwrap and GNU date; elsewhere a SKIP line). One line per
+# test_plants.sh (plants.sh and coverage-plants.sh), test_gate.sh. harness adds test_factory.sh (Linux only: bwrap and GNU date; elsewhere a SKIP line). One line per
 # check, `OK|FAIL|BLIND <check> <secs>s` (lib/verdict.sh), with the failing output's tail. Exit 0 all OK, 2 any BLIND,
 # else 1. A new script or test joins this list in the commit that adds it. Measured times live in INDEX.md (2026-11-09,
-# template dev box: quick 15 s, harness 75 s, test_factory alone 60 s).
+# template dev box: quick 22 s, harness 95 s, test_factory alone 73 s).
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -62,6 +62,7 @@ check python_syntax python_syntax
 check test_ledgers python3 scripts/test_ledgers.py
 check test_hooks bash scripts/test_hooks.sh
 check test_plants bash scripts/test_plants.sh
+check test_gate bash scripts/test_gate.sh
 if [[ $tier == harness ]]; then
     if [[ $(uname -s) == Linux ]]; then
         check test_factory bash scripts/test_factory.sh

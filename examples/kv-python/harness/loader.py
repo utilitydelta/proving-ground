@@ -2,6 +2,7 @@
 
 import hashlib
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -12,6 +13,15 @@ DEFAULT_TREE = HERE.parent / "product"
 
 class LoadError(Exception):
     pass
+
+
+def tree_from_env() -> Path:
+    """The product tree the caller named in TREE. No fallback: a suite that quietly graded a fixed tree would stay
+    green on every planted copy and every snapshot."""
+    tree = os.environ.get("TREE")
+    if not tree:
+        raise LoadError("TREE is unset: name the product tree, e.g. TREE=examples/kv-python/product")
+    return Path(tree)
 
 
 def load_product(tree: Path) -> ModuleType:

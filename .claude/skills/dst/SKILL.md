@@ -37,7 +37,7 @@ The checker reaches internals only through a surface the human chose: `snapshot(
 
 ## Teeth
 
-- **Plants.** Each deliberate break (premature ack, skipped version bump, missing repair) is a plant patch (`harness/README.md`) whose `# check:` replays the documented seed. A model toggle per load-bearing rule. `scripts/plants.sh` runs them in the gate's harness tier.
+- **Plants.** Each deliberate break (premature ack, skipped version bump, missing repair) is a plant patch (`harness/README.md`) whose `# check:` replays the documented seed. A model toggle per load-bearing rule. Each plant is some coverage row's `plant`, so the gate's harness tier proves it; `scripts/plants.sh` runs them by `# check:` standalone.
 - **One tape per check** whose only violation is that check. A toggle test that asserts only "violations > 0" lets most checks carry no weight.
 - A model column labelled "prior system" gets each branch checked against the code line it cites before a conclusion rests on it.
 

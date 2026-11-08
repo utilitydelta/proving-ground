@@ -9,8 +9,8 @@ Current state of the bot side. Progressive detail: this page names each subsyste
 
 ## Invariants
 
-- Harness code imports the product from `$TREE` at run time, never a static path (`harness/README.md`). The gate sets `TREE` to a snapshot, `scripts/plants.sh` to a planted copy, `scripts/affected.sh` and Watch to the live `HUMAN_REPO`.
-- The gate never runs on a live tree. It snapshots: bot trees via `git archive HEAD`, the human tree with its uncommitted edits, and prints the human HEAD and a dirty hash so a verdict names exactly what it judged.
+- Harness code imports the product from `$TREE` at run time, never a static path (`harness/README.md`). The gate sets `TREE` to a snapshot, `scripts/coverage-plants.sh` and `scripts/plants.sh` to clean and planted copies, `scripts/affected.sh` and Watch to the live `HUMAN_REPO`.
+- The gate never runs on a live tree. It snapshots: bot trees via `git archive HEAD`, the human tree with its uncommitted edits, and prints the human HEAD and a dirty hash so a verdict names exactly what it judged. Stages run the snapshot's own `scripts/run.sh` and verdict code, so uncommitted tooling edits cannot change a verdict.
 - Build output and run output never land in the human repo or in git: `.run/` holds them (below).
 - A workspace pointed at the lead repo or a scratch copy instead of the human repo is listed under Platforms with the reason.
 - Internals are reached through a surface the human chose (a snapshot, a public API, compiler output), never through copied or shadowed human source outside session scratch.
@@ -24,16 +24,16 @@ One workspace per language or toolchain under `harness/<language>/`. Say here wh
 
 | Subsystem | Location | State |
 |---|---|---|
-| Gate | `scripts/gate.sh <tree> [quick\|harness\|full]`: a `lint` stage, then the product stages in its `# ADOPT: product stages below` block | Stub |
+| Gate | `scripts/gate.sh <tree> [quick\|harness\|full]`: a `lint` stage, then the product stages in its `# ADOPT: product stages below` block; its `coverage-plants` stage proves every `harness/coverage.tsv` row against its plant at harness tier; keep that stage | Stub: the stages are the kv example's |
 | Verdicts | `scripts/lib/verdict.sh`: OK, FAIL or BLIND per stage, times to two decimals; exit 0 all OK, 2 any BLIND, else 1 | Working |
 | Bot tooling checks | `scripts/check-tooling.sh [quick\|harness]`, run by `finish` only when `scripts/changed-tooling.sh <base>` says `scripts/`, `.claude/` or `project.env` changed | Working |
 | Bounded runs | `scripts/run.sh`: timeout, memory cap, machine-wide heavy slots (`HEAVY_DIR` in the user cache, `-H` capped by `HEAVY_TIMEOUT_MAX`) | Working |
 | Run output | `.run/out/` (`RUN_OUT` per run), `.run/tmp/` (snapshots, plant copies), `.run/build/` (build caches), `.run/logs/`; gitignored, cleared by `scripts/clean-tmp.sh` | Working |
 | Plants | `scripts/plants.sh`, `scripts/new-plant.sh`, `harness/<language>/plants/`; format in `harness/README.md` | Working |
-| Coverage | `harness/coverage.tsv`, `scripts/affected.sh [base] [--run]` | Working; empty until harnesses exist |
+| Coverage | `harness/coverage.tsv`, rows proven against their plants by `scripts/coverage-plants.sh` in the harness tier; `scripts/affected.sh [base] [--run] [--tier quick\|harness\|full]` | Working |
 | Registers | `decisions/`, `risks/`, `scripts/decisions.py`, `scripts/risks.py`, `scripts/findings.py`, `scripts/new-id.sh` | Working |
 | Sessions | `sessions/`, `scripts/new-session.sh` | Working |
-| Hooks | `scripts/hooks/guard-human-repo.sh`, `scripts/hooks/no-rm-rf.sh`, `scripts/hooks/pre-commit` | Working |
+| Hooks | `scripts/hooks/guard-human-repo.sh` (best effort over common write forms; the Factory jail is the hard boundary), `scripts/hooks/no-rm-rf.sh`, `scripts/hooks/pre-commit` | Working |
 | Lint | `scripts/lint.py`, `scripts/lint.py --adoption` | Working |
 | Push | `scripts/push.sh`, refuses the template origin; `finish` pushes through it | Working |
 | Factory runner | `scripts/factory.sh`, `scripts/test_factory.sh`, `.claude/skills/factory/` | Working |

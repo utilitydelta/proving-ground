@@ -13,7 +13,7 @@ A new harness lands with a `scripts/gate.sh` stage, a `coverage.tsv` row and at 
 
 ## Importing the product from TREE
 
-Harness code reads one variable, `TREE`, and loads the product from it when it runs. The gate sets it to a snapshot, `scripts/plants.sh` to a planted copy, `scripts/affected.sh` to the live `HUMAN_REPO`. A static path to `HUMAN_REPO` in a manifest grades the live tree every time: the plant goes uncaught and the snapshot is ignored, and both still print OK. Never copy or vendor the product's source.
+Harness code reads one variable, `TREE`, and loads the product from it when it runs. The gate sets it to a snapshot, `scripts/coverage-plants.sh` and `scripts/plants.sh` to clean and planted copies, `scripts/affected.sh` to the live `HUMAN_REPO`. A static path to `HUMAN_REPO` in a manifest grades the live tree every time: the plant goes uncaught and the snapshot is ignored, and both still print OK. Never copy or vendor the product's source.
 
 Build output never lands in `TREE`: `scripts/run.sh` points caches at `.run/build/`. A toolchain that must write into the tree it builds (npm install, dotnet obj/bin, pip -e, make) builds a snapshot copy under `.run/tmp/`.
 
@@ -22,7 +22,7 @@ Build output never lands in `TREE`: `scripts/run.sh` points caches at `.run/buil
 | Rust | A `path` dependency is fixed in the manifest, so declare the product as a registry dependency (`product = "0.1"`, matching its version) and have the stage patch it per run: `cargo test --offline --config 'patch.crates-io.product.path="'"$TREE"'/crates/product"'`. Awkward, but every run builds the tree it names, offline. `CARGO_TARGET_DIR` stays under `.run/build/` |
 | TypeScript / JS | `await import(path.join(process.env.TREE, "src/index.ts"))` through a runner that loads TS (tsx), or the built JS from a snapshot copy. No `file:` dependency |
 | Python | `sys.path.insert(0, os.environ["TREE"])` (or `TREE/src`) before the product import |
-| Go | The stage writes a `go.work` (or a `replace` into a copied `go.mod`) under `.run/tmp/` pointing at `$TREE`, then runs with `GOWORK` set to it |
+| Go | One wrapper, `harness/go/go.sh`, for every go subcommand: it writes a `go.work` into `$RUN_OUT` that uses the harness module and `$TREE`, exports `GOWORK` to it and runs `go "$@"`. vet, build and test all need the workspace, so no stage calls `go` bare. Workspace mode rejects `-mod=mod`: keep it out of `GOFLAGS` |
 | C / C++ | `-I$TREE/include` and the product sources compiled from `$TREE`, objects under `.run/build/`, HAL fakes from the harness standing in for hardware |
 | .NET | `<ProjectReference Include="$(TREE)/src/Product/Product.csproj" />`, `TREE` passed as an MSBuild property; build a snapshot copy, since obj/ and bin/ land beside the project |
 
@@ -30,7 +30,14 @@ A workspace pointed at lead or a scratch copy is listed under Platforms in `docs
 
 ## coverage.tsv
 
-The machine-readable coverage map. Columns: `glob`, `command`, `tier`, `budget_s`, `plant`. `glob` matches paths in the human repo; `scripts/affected.sh [base]` prints the commands whose globs match the paths changed since `base`. `tier` is one of the `fast-feedback` tiers; `budget_s` is measured, not guessed; `plant` names the patch that proves the row can go red. A row without a measured budget or a plant is not finished.
+The machine-readable coverage map; `scripts/lint.py` fails when it is missing or empty. Columns: `glob`, `command`, `tier`, `budget_s`, `plant`.
+
+- `glob` matches paths in the human repo. `scripts/affected.sh [base] [--run] [--tier quick|harness|full]` prints the rows whose globs match the paths changed since `base`, up to the quick tier unless `--tier` raises it; `--run` runs them under `scripts/run.sh`. A diff no row matches under `--run` prints `BLIND affected` and exits 2.
+- `command` is bare (no `scripts/run.sh` inside: the caller wraps it) and reads the product through `$TREE`.
+- `tier` is one of the `fast-feedback` tiers; `budget_s` is measured, not guessed.
+- `plant` names the patch the row must catch. The gate's harness tier proves it with `scripts/coverage-plants.sh <tree>`: the row's command runs with `TREE` on a clean copy, where it must be green, and on a copy with that plant applied, where it must be red. FAIL there usually means the command reads a fixed path instead of `$TREE`. A plant no row names is only a standalone `scripts/plants.sh` check, and the harness tier warns about it.
+
+A row without a measured budget or a proven plant is not finished.
 
 ## Plants
 
@@ -52,4 +59,4 @@ diff --git a/kvcore.py b/kvcore.py
 @@ ...
 ```
 
-The first line says what the plant breaks. `# check:` must exit nonzero with the plant applied; `# timeout:` is optional, in seconds. `examples/kv-python/plants/` has three working plants. The gate's harness tier runs the plants dirs listed in its ADOPT block; a new plants dir joins that list in the commit that adds it. A plant that turns BLIND after a human change is fixed or replaced in the same session.
+The first line says what the plant breaks. `# check:` must exit nonzero with the plant applied; `# timeout:` is optional, in seconds. `examples/kv-python/plants/` has three working plants. The gate's harness tier grades plants through their coverage rows (`scripts/coverage-plants.sh`), with the row's command, not the plant's `# check:` line; `scripts/plants.sh` is the standalone check by `# check:` that Tend runs over every plants dir. A plant that turns BLIND after a human change is fixed or replaced in the same session.

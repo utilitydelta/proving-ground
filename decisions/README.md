@@ -1,6 +1,6 @@
 # Decisions
 
-One file per micro-decision, `NNN-<slug>.md`, written by `scripts/new-id.sh decision <slug> [session-dir]`. What counts as a decision and when one is confirmed: `AGENTS.md` Decisions. `scripts/decisions.py check` lints the folder; `provisional` lists what still needs the human's ruling by name; `stats` gives the overturn rate per `decided_by`, the real measure of how far provisional calls can be trusted. A filled-in example: `examples/kv-python/sample-records/`.
+One file per micro-decision, `NNN-<slug>.md`, written by `scripts/new-id.sh decision <slug> [session-dir]`. What counts as a decision and when one is confirmed: `AGENTS.md` Decisions. `scripts/decisions.py check` lints every `*.md` here except this README; `provisional` lists what still needs the human's ruling by name; `stats` gives the overturn rate per `decided_by`, the real measure of how far provisional calls can be trusted. A filled-in example: `examples/kv-python/sample-records/`.
 
 ```markdown
 ---

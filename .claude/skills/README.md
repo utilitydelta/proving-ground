@@ -10,7 +10,7 @@ Agents own these. Every session loads exactly one mode skill first; the mode pul
 | `task` | Human hands over a job | Creates the session, picks the weight, runs the implementation loop |
 | `factory` | `scripts/factory.sh <session> --until <deadline>`; Linux, bwrap, Claude Code | One iteration of an unattended build-out in lead, state on disk |
 | `tend` | Human asks for cleanup; Factory pauses | Deletes dead, slow and orphan tests and docs; re-measures budgets; runs plants; audits intent |
-| `debrief` | Human, after a coding chunk or a run | Findings, praise, verdicts and rulings by name |
+| `debrief` | Human, after a coding chunk or a run | Findings, praise, verdicts and rulings by name; picks any format beyond `report.md` |
 | `closeoff` | Human, to drain provisional decisions | Recap with code, ruling by name, History lines |
 | `invariant` | Human, before code builds on a promise | Two or three promises, executed tapes, priced in state and risk |
 
@@ -22,18 +22,17 @@ Agents own these. Every session loads exactly one mode skill first; the mode pul
 | `dst` | Seeded simulator at the declared seam, reference model, checker, tapes | `task`, `factory`, `invariant`, `watch` when a subject is touched |
 | `triage` | Classifies a confirmed finding, decides whether it interrupts | `watch`, `task`, `factory`, any confirmed finding |
 | `finish` | Clean tree, gate, current docs, INDEX row, commit, `scripts/push.sh` | end of every session, debriefs included |
-| `present` | Picks a format beyond `report.md` | `task`, `tend`, `factory`, `debrief` at the end |
 
 ## Routing
 
 ```
 watch     -> fast-feedback (probe/targeted only) -> triage -> finish
 task      -> build-method:scout? -> build-method:implementation-loop
-             -> dst, fast-feedback, triage -> finish -> present
+             -> dst, fast-feedback, triage -> finish
 factory   -> task (Build) -> fast-feedback (heavy = job) -> triage
              -> pause: tend + think agents -> finish under 30 min to deadline
 tend      -> fast-feedback (budgets, mutants) -> finish
-debrief   -> present? -> finish
+debrief   -> formats? -> finish
 closeoff, invariant -> dst (tapes) -> finish
 ```
 

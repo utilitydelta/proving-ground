@@ -1,10 +1,8 @@
-import os
 import unittest
-from pathlib import Path
 
-from loader import DEFAULT_TREE, load_product
+from loader import load_product, tree_from_env
 
-kv = load_product(Path(os.environ.get("TREE", DEFAULT_TREE)))
+kv = load_product(tree_from_env())
 
 RECORDS = [kv.encode(kv.PUT, "a", "1"), kv.encode(kv.PUT, "b", "22"), kv.encode(kv.PUT, "c", "333")]
 LOG = b"".join(RECORDS)

@@ -6,7 +6,7 @@
 #
 #   scripts/test_factory.sh
 #
-# Exit 1 on the first failed case. 60 s on the template dev box (2026-11-09), most of it the stub sleeping.
+# Exit 1 on the first failed case. 73 s on the template dev box (2026-11-09), most of it the stub sleeping.
 set -uo pipefail
 # No -e: each case inspects exit codes and greps that are expected to fail.
 
@@ -57,6 +57,14 @@ case $STUB_MODE in
     nested) if (( n == 1 )); then echo "first" >> "$state"
                 echo "$RUN_SH -H -t 5 -- echo inner-ok" > "$session/jobs/pending/a.sh"
             elif [[ -e $session/jobs/done/a.exit ]]; then echo "Status: done" >> "$state"; fi ;;
+    itertimeout) if (( n == 1 )); then echo "first" >> "$state"; sleep 30; echo "survived" >> "$state"
+                 else echo "Status: done" >> "$state"; fi ;;
+    finish) echo "${*: -1}" >> "$session/prompts"
+            if (( n == 1 )); then echo "first" >> "$state"
+                printf 'sleep 1\necho ran-a\n' > "$session/jobs/pending/a.sh"
+                printf '#!/usr/bin/env bash\n# finish: yes\necho ran-f\n' > "$session/jobs/pending/f.sh"
+                sleep 6
+            else sleep 60; echo "survived" >> "$state"; fi ;;
     jail) echo hacked > "$JAIL_TARGET/f" 2>/dev/null; echo hacked > "$JAIL_EXTRA/f" 2>/dev/null; echo "Status: done" >> "$state" ;;
 esac
 echo '{"type":"result","total_cost_usd":0.01,"num_turns":1}'
@@ -131,6 +139,26 @@ grep -q "stop: Status: done" "$root/toolong/progress.md" || fail "toolong: $(cat
 grep -q "runner: refused, # timeout: 99999 is past HEAVY_TIMEOUT_MAX 600" "$root/toolong/jobs/done/big.out" \
     && ! grep -q '^ran$' "$root/toolong/jobs/done/big.out" || fail "toolong: $(cat "$root/toolong/jobs/done/big.out")"
 
+# FACTORY_ITERATION_TIMEOUT kills an iteration that runs long; the kill is noted and the run goes on.
+FACTORY_ITERATION_TIMEOUT=2 run itertimeout --until "+1 hour"
+grep -q "stop: Status: done" "$root/itertimeout/progress.md" || fail "itertimeout: $(cat "$root/itertimeout/runner.out")"
+grep -q "iteration 1 killed by its 2 s timeout" "$root/itertimeout/progress.md" \
+    || fail "itertimeout: no kill note: $(cat "$root/itertimeout/progress.md")"
+! grep -q survived "$root/itertimeout/session-state.md" || fail "itertimeout: iteration 1 outlived its timeout"
+
+# Past the deadline only `# finish: yes` jobs run, then one finish iteration bounded by deadline + FACTORY_FINISH_GRACE.
+began=$SECONDS
+FACTORY_FINISH_GRACE=6 run finish --until "+4 seconds"
+took=$(( SECONDS - began ))
+grep -q "stop: deadline, finish iteration done" "$root/finish/progress.md" || fail "finish: $(cat "$root/finish/runner.out")"
+[[ $(cat "$root/finish/jobs/done/f.exit" 2> /dev/null) == 0 ]] && grep -q ran-f "$root/finish/jobs/done/f.out" \
+    || fail "finish: the finish job never ran: $(cat "$root/finish/progress.md")"
+[[ -e $root/finish/jobs/pending/a.sh && ! -e $root/finish/jobs/done/a.exit ]] || fail "finish: a non-finish job ran"
+[[ $(cat "$root/finish/n") == 2 ]] || fail "finish: expected 2 iterations, got $(cat "$root/finish/n")"
+sed -n 2p "$root/finish/prompts" | grep -q "Deadline passed" || fail "finish: prompt 2: $(sed -n 2p "$root/finish/prompts")"
+grep -q "iteration 2 killed by its [0-9]* s timeout" "$root/finish/progress.md" || fail "finish: iteration 2 not bounded"
+! grep -q survived "$root/finish/session-state.md" && (( took < 30 )) || fail "finish: took $took s"
+
 run weekly --until "+1 hour"
 grep -q "stop: weekly limit" "$root/weekly/progress.md" || fail "weekly: $(cat "$root/weekly/runner.out")"
 
@@ -194,4 +222,4 @@ run done --until "-1 minute"
 [[ $(cat "$root/done/exit") == 2 ]] || fail "past deadline: expected refusal"
 
 [[ $root == "${TMPDIR:-/tmp}"/tmp.* ]] && rm -r -- "$root"
-echo "factory: 20 cases OK"
+echo "factory: 22 cases OK"

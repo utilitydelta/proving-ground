@@ -11,8 +11,10 @@ Checks:
   - untracked files loose at the repo root, outside ROOT_ALLOWED
   - sessions/*/scratch plus .run/ over SCRATCH_BUDGET from project.env (summed in Python: no du, so it runs on macOS)
   - scripts/decisions.py check, scripts/risks.py check and scripts/findings.py check
-  - harness/coverage.tsv: every row has a known tier, a numeric budget_s, and a plant column that is empty or an
-    existing patch path; every harness/**/plants/*.patch and examples/*/plants/*.patch has a `# check:` line
+  - harness/coverage.tsv: exists with at least one data row; every row has a known tier, a numeric budget_s, a
+    command that reads $TREE (or ${TREE}) and does not wrap scripts/run.sh, and a plant column that is empty or an
+    existing patch path; every harness/**/plants/*.patch and examples/*/plants/*.patch that no row names has a
+    `# check:` line (a row's plant is graded by the row's command, scripts/coverage-plants.sh)
   - frozen sessions: a session whose line is in HEAD's INDEX `## Sessions` has been through `finish`. From the commit
     that added its INDEX line to the working tree (later commits, staged, unstaged and untracked alike, so a
     `--no-verify` commit is caught at the next lint) it may change only `status:` and `adopted_in:` lines in
@@ -23,7 +25,10 @@ Checks:
 Adoption (--adoption): HUMAN_REPO exists and no longer points into examples/; every AGENTS.md `## Project` line is
 filled (no <...> placeholder); docs/workload-shapes.md exists without its EXAMPLE ROW marker, or the Workload shapes
 line says none; docs/ARCHITECTURE.md's Gate row no longer says Stub; no non-comment line of scripts/gate.sh mentions
-examples/kv-python; `git remote get-url origin` is not TEMPLATE_ORIGIN (project.env).
+examples/kv-python; once HUMAN_REPO is out of examples/, no line outside examples/ refers to the example
+(`examples/`, `kv-python`, `kv-example`), except comment lines in non-Markdown files, the README's `## Adopting it`
+section, sessions/, scripts/lint.py and scripts/test_*; `git remote get-url origin` is not TEMPLATE_ORIGIN
+(project.env).
 
 PROJECT_ROOT overrides the repo root (tests).
 """
@@ -45,6 +50,9 @@ SESSION_NAME = re.compile(r"session-v\d+-[a-z]+-[a-z0-9-]*[a-z0-9]")
 PLACEHOLDER = re.compile(r"<[^<>\n]+>")
 TIERS = ("probe", "targeted", "quick", "harness", "full")
 EXAMPLE_MARKER = "EXAMPLE ROW"
+EXAMPLE_REF = re.compile(r"examples/|kv-example|kv-python")
+EXAMPLE_EXEMPT = {"scripts/lint.py"}
+TREE_REF = re.compile(r"\$TREE\b|\$\{TREE\}")
 
 
 def project_env(root):
@@ -154,32 +162,51 @@ def registers(root):
     env = dict(os.environ, DECISIONS_DIR=str(root / "decisions"), RISKS_DIR=str(root / "risks"),
                SESSIONS_DIR=str(root / "sessions"))
     for script in ("decisions.py", "risks.py", "findings.py"):
-        run = subprocess.run([sys.executable, str(SCRIPTS / script), "check"], capture_output=True, text=True, env=env)
+        run = subprocess.run([sys.executable, str(SCRIPTS / script), "check"], capture_output=True, text=True,
+                             errors="replace", env=env)
         if run.returncode:
+            # Problem lines, then one line that always says the script failed: a crash prints no problem lines.
             out += [f"{script} check: {line}" for line in run.stdout.splitlines()[:-1]]
+            tail = " | ".join(line.strip() for line in run.stderr.strip().splitlines()[-3:]) or "no stderr"
+            out.append(f"{script} check exited {run.returncode}: {tail}")
     return out
 
 
 def coverage(root):
-    out = []
     table = root / "harness" / "coverage.tsv"
-    lines = table.read_text().splitlines() if table.is_file() else []
-    for n, line in enumerate(lines, 1):
+    if not table.is_file():
+        return ["harness/coverage.tsv: missing; the harness tier grades its rows (header: glob, command, tier, "
+                "budget_s, plant)"]
+    out, data, referenced = [], 0, set()
+    for n, line in enumerate(table.read_text().splitlines(), 1):
         if n == 1 or not line.strip() or line.startswith("#"):
             continue
+        data += 1
         cols = line.split("\t")
         if len(cols) != 5:
             out.append(f"harness/coverage.tsv:{n}: {len(cols)} columns, expected glob, command, tier, budget_s, plant")
             continue
-        _glob, _command, tier, budget, plant = cols
+        _glob, command, tier, budget, plant = cols
+        if not TREE_REF.search(command):
+            out.append(f"harness/coverage.tsv:{n}: command does not read $TREE; a fixed path grades the live tree, "
+                       "never the snapshot or the planted copy")
+        if "scripts/run.sh" in command:
+            out.append(f"harness/coverage.tsv:{n}: command wraps scripts/run.sh; rows are bare, the runner wraps them")
+        if plant.strip():
+            referenced.add((root / plant.strip()).resolve())
         if tier not in TIERS:
             out.append(f"harness/coverage.tsv:{n}: tier {tier!r} not one of {', '.join(TIERS)}")
         if not re.fullmatch(r"\d+(\.\d+)?", budget.strip()):
             out.append(f"harness/coverage.tsv:{n}: budget_s {budget!r} is not a measured number of seconds")
         if plant.strip() and not (plant.strip().endswith(".patch") and (root / plant.strip()).is_file()):
             out.append(f"harness/coverage.tsv:{n}: plant {plant!r} is not an existing .patch path")
+    if not data:
+        out.append("harness/coverage.tsv: no data rows; every harness lands with a row (the template ships the "
+                   "example's)")
     patches = sorted(root.glob("harness/**/plants/*.patch")) + sorted(root.glob("examples/*/plants/*.patch"))
     for patch in patches:
+        if patch.resolve() in referenced:
+            continue
         head = []
         for line in patch.read_text().splitlines():
             if line.startswith(("diff ", "--- ", "Index: ")):
@@ -263,6 +290,38 @@ def template_origin(root, env):
     return None
 
 
+def repo_files(root):
+    """Tracked and untracked-not-ignored files, relative to root; a plain walk outside git."""
+    listed = git(root, "ls-files", "-co", "--exclude-standard")
+    if listed is not None:
+        return sorted(set(listed.splitlines()))
+    return sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file() and ".git" not in p.parts)
+
+
+def example_references(root):
+    """Non-comment lines outside examples/ that still point at the worked example. Exempt: the README's
+    `## Adopting it` steps, this script and the tooling tests (they carry example paths as fixtures)."""
+    out = []
+    for rel in repo_files(root):
+        if rel.startswith(("examples/", ".run/", "sessions/")) or rel in EXAMPLE_EXEMPT \
+                or (rel.startswith("scripts/test_") and "/" not in rel[len("scripts/"):]):
+            continue
+        try:
+            lines = (root / rel).read_text(encoding="utf-8").splitlines()
+        except (UnicodeDecodeError, OSError):
+            continue
+        heads = headings_by_line("\n".join(lines))
+        for n, line in enumerate(lines, 1):
+            if not EXAMPLE_REF.search(line):
+                continue
+            if not rel.endswith(".md") and line.lstrip().startswith("#"):
+                continue
+            if rel == "README.md" and heads[n] == "## Adopting it":
+                continue
+            out.append(f"{rel}:{n}: references examples/ or the kv example; point it at the project's own harness")
+    return out
+
+
 def adoption(root, env):
     out = []
     human = env.get("HUMAN_REPO", "")
@@ -294,6 +353,8 @@ def adoption(root, env):
     for n, line in enumerate(gate.read_text().splitlines() if gate.is_file() else [], 1):
         if "examples/kv-python" in line and not line.lstrip().startswith("#"):
             out.append(f"scripts/gate.sh:{n}: still runs examples/kv-python; write the project's product stages")
+    if path is not None and path.is_dir() and not path.resolve().is_relative_to((root / "examples").resolve()):
+        out += example_references(root)
     url = template_origin(root, env)
     if url:
         out.append(f"git origin {url} is the template (TEMPLATE_ORIGIN); point origin at the project's own repo")

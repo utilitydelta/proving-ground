@@ -4,19 +4,19 @@ Maintained by agents; Tend rebuilds it from the tree. A wrong row is a bug. Ever
 
 ## Coverage
 
-`harness/coverage.tsv` maps human-repo paths to checks, with tier, measured budget and the plant each row proves it catches (columns in `harness/README.md`). `scripts/affected.sh [base] [--run]` prints the targeted commands for a diff, or runs them. Watch picks checks from it; Task reads it to find the delta.
+`harness/coverage.tsv` maps human-repo paths to checks, with tier, measured budget and the plant each row must catch, proven by the harness tier (columns in `harness/README.md`). `scripts/affected.sh [base] [--run] [--tier quick|harness|full]` prints the rows a diff touches, or runs them. Watch picks checks from it; Task reads it to find the delta.
 
 ## Tier budgets
 
-Measured wall-clock per tier on this machine, re-measured at every Tend. Fill from `scripts/gate.sh` output: the `<secs>s` on each stage line, summed per tier. Empty until measured; never a guess. Template numbers are the kv-python example on the template author's machine; replace them after adoption. A run past its budget is a finding about the harness.
+Measured wall-clock per tier on this machine, re-measured at every Tend. Fill from `scripts/gate.sh` output: the `<secs>s` on each stage line, summed per tier. Empty until measured; never a guess. The gate rows below are the kv-python example's numbers on the template author's machine: replace them after adoption. A run past its budget is a finding about the harness.
 
 | Tier | Command | Budget | Measured on | Date |
 |---|---|---|---|---|
-| quick | `scripts/gate.sh <tree> quick` | 5 s | 0.48 s (lint 0.06, kv-example 0.42) | 2026-11-09 |
-| harness | `scripts/gate.sh <tree> harness` | 10 s | 0.71 s (lint 0.06, kv-example 0.65) | 2026-11-09 |
-| full | `scripts/gate.sh <tree> full` | 30 s | 1.38 s (lint 0.06, kv-example 1.32) | 2026-11-09 |
-| tooling quick | `scripts/check-tooling.sh quick` | 30 s | 14.5 s | 2026-11-09 |
-| tooling harness | `scripts/check-tooling.sh harness` | 120 s | 74.9 s (test_factory 59.7) | 2026-11-09 |
+| quick | `scripts/gate.sh <tree> quick` | 5 s | 0.38 to 0.68 s (lint 0.06, unit 0.19, sim 0.13) | 2026-11-09 |
+| harness | `scripts/gate.sh <tree> harness` | 10 s | 1.8 s (adds compile 0.05, coverage-plants 1.36) | 2026-11-09 |
+| full | `scripts/gate.sh <tree> full` | 30 s | 2.5 s (adds sweep 0.70) | 2026-11-09 |
+| tooling quick | `scripts/check-tooling.sh quick` | 30 s | 22.3 s | 2026-11-09 |
+| tooling harness | `scripts/check-tooling.sh harness` | 150 s | 94.5 s (test_factory 72.5) | 2026-11-09 |
 | mutants | Tend's mutation run over files changed since the last Tend, per file | | | |
 
 ## Sessions

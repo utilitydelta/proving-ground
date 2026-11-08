@@ -6,7 +6,8 @@
   scripts/findings.py check      exit 1 on a malformed finding or an unfilled skeleton placeholder (scripts/skeleton.py)
 
 A finding is sessions/<session>/findings/NNN-<slug>.md with frontmatter class, status, touches and evidence
-(sessions/README.md). check: class and status in their enums, touches and evidence non-empty, adopted_in only on an
+(sessions/README.md). check judges every *.md in a findings/ folder but README.md, so a misnamed or non-UTF-8 file
+is a problem, never skipped; class and status in their enums, touches and evidence non-empty, adopted_in only on an
 adopted finding. SESSIONS_DIR overrides the folder (tests).
 """
 import os
@@ -14,23 +15,28 @@ import pathlib
 import re
 import sys
 
-from skeleton import placeholder_problems
+from skeleton import placeholder_problems, read_register, register_files
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DIR = pathlib.Path(os.environ.get("SESSIONS_DIR") or ROOT / "sessions")
 CLASSES = ("one-way-door", "time-sink", "regression", "two-way-door")
 STATUS = ("open", "adopted", "rejected", "noise")
 REQUIRED = ("class", "status", "touches", "evidence")
+NAME = re.compile(r"\d+-.+\.md")
 
 
 def load(path):
-    text = path.read_text()
+    text, unreadable = read_register(path)
     m = re.match(r"---\n(.*?)\n---\n", text, re.S)
     fields = {k: v.strip() for k, v in re.findall(r"^(\w+):[ \t]*(.*)$", m.group(1), re.M)} if m else {}
-    return {**fields, "path": path, "frontmatter": bool(m), "text": text}
+    return {**fields, "path": path, "frontmatter": bool(m), "text": text, "unreadable": unreadable}
 
 
 def problems(f):
+    if f["unreadable"]:
+        return [f["unreadable"]]
+    if not NAME.fullmatch(f["path"].name):
+        return [f"file name {f['path'].name} is not NNN-<slug>.md"]
     if not f["frontmatter"]:
         return ["no --- frontmatter block"]
     out = [f"missing {k}" for k in REQUIRED if not f.get(k)]
@@ -67,7 +73,7 @@ def check(fs):
 
 
 def main(args):
-    fs = [load(p) for p in sorted(DIR.glob("*/findings/*.md"))] if DIR.is_dir() else []
+    fs = [load(p) for folder in sorted(DIR.glob("*/findings")) for p in register_files(folder)] if DIR.is_dir() else []
     cmd = args[0] if args else "list"
     if cmd == "list":
         for f in fs:

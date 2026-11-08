@@ -7,8 +7,9 @@
   scripts/risks.py check      exit 1 on a malformed file or an unfilled skeleton placeholder (scripts/skeleton.py)
 
 Files are risks/RNNN-<slug>.md with a '# RNNN: <title>' line. RISKS_DIR overrides the folder (tests).
-check enforces AGENTS.md: score == likelihood x consequence, both 1-5, status in the enum. open and proposed pass at
-any score: they are the queue. controlled or accepted at 12 and up needs a control (not `none`) and cites a decision
+check judges every *.md but README.md (a misnamed or non-UTF-8 file is a problem) and enforces AGENTS.md: score ==
+likelihood x consequence, both 1-5, status in the enum. Status and control agree at any score: controlled and proposed
+name a control (not `none`), open may say none. open and proposed pass at any score: they are the queue. controlled or accepted at 12 and up needs a control (not `none`) and cites a decision
 that exists in decisions/. accepted at 5 to 11 cites a decision that exists and has been made (not open, not
 decided_by none). DECISIONS_DIR overrides where cited decisions are looked up.
 Columns: id, score, likelihood x consequence, status, decision, title.
@@ -19,7 +20,7 @@ import re
 import sys
 
 import decisions
-from skeleton import placeholder_problems
+from skeleton import placeholder_problems, read_register, register_files
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DIR = pathlib.Path(os.environ.get("RISKS_DIR") or ROOT / "risks")
@@ -28,19 +29,19 @@ REQUIRED = ("likelihood", "consequence", "score", "control", "status", "decision
 DECISION_ID = re.compile(r"\bD-\d+\b")
 
 
-def placeholders(path):
-    """Lines still holding a skeleton placeholder (scripts/skeleton.py), frontmatter and body alike."""
-    return placeholder_problems(path.read_text())
+NAME = re.compile(r"R\d+-.+\.md")
+NO_CONTROL = ("none", "")
 
 
 def load(path):
-    text = path.read_text()
+    text, unreadable = read_register(path)
     m = re.match(r"---\n(.*?)\n---\n", text, re.S)
     fields = {k: v.strip() for k, v in re.findall(r"^(\w+):[ \t]*(.*)$", m.group(1), re.M)} if m else {}
     title = re.search(r"^# (R\d+): (.*)$", text, re.M)
     fields["id"], fields["title"] = (title.group(1), title.group(2)) if title else (path.stem, "")
     fields["path"] = path
     fields["frontmatter"] = bool(m)
+    fields["unreadable"], fields["text"] = unreadable, text
     return fields
 
 
@@ -52,10 +53,14 @@ def number(d, key):
 def decision_index():
     """D-NNN -> its fields, for every decision on disk."""
     folder = decisions.DIR
-    return {d["id"]: d for d in map(decisions.load, folder.glob("[0-9]*.md"))} if folder.is_dir() else {}
+    return {d["id"]: d for d in map(decisions.load, register_files(folder))}
 
 
 def problems(d, known):
+    if d["unreadable"]:
+        return [d["unreadable"]]
+    if not NAME.fullmatch(d["path"].name):
+        return [f"file name {d['path'].name} is not RNNN-<slug>.md"]
     if not d["frontmatter"]:
         return ["no --- frontmatter block"]
     out = [f"missing {k}" for k in REQUIRED if not d.get(k)]
@@ -68,10 +73,13 @@ def problems(d, known):
     status = d.get("status")
     if status not in STATUS:
         out.append(f"status {status!r} not one of {', '.join(STATUS)}")
+    control = d.get("control", "none").strip().lower()
+    if status in ("controlled", "proposed") and control in NO_CONTROL:
+        out.append(f"{status} with control: none; name the control it has or proposes")
     cited = DECISION_ID.findall(d.get("decision", ""))
     missing = [c for c in cited if c not in known]
     if score is not None and status in ("controlled", "accepted") and score >= 12:
-        if d.get("control", "none").strip().lower() in ("none", ""):
+        if status == "accepted" and control in NO_CONTROL:
             out.append(f"{status} at score {score} with control: none; 12 and up needs a control")
         if not cited or missing:
             out.append(f"{status} at score {score} must cite an existing decision (decision: {d.get('decision')!r})")
@@ -85,7 +93,7 @@ def problems(d, known):
         out.append("no '# RNNN: title' line")
     elif d["id"] != d["path"].name.split("-")[0]:
         out.append(f"id {d['id']} does not match file name")
-    return out
+    return out + placeholder_problems(d["text"])
 
 
 def score_of(d):
@@ -100,7 +108,7 @@ def show(rs):
 
 def check(rs):
     known = decision_index()
-    bad = [(r["path"].name, p) for r in rs for p in problems(r, known) + placeholders(r["path"])]
+    bad = [(r["path"].name, p) for r in rs for p in problems(r, known)]
     ids = [r["id"] for r in rs]
     bad += [(i, "duplicate id") for i in sorted({i for i in ids if ids.count(i) > 1})]
     for name, p in bad:
@@ -110,7 +118,7 @@ def check(rs):
 
 
 def main(args):
-    rs = [load(p) for p in DIR.glob("R[0-9]*.md")] if DIR.is_dir() else []
+    rs = [load(p) for p in register_files(DIR)]
     rs.sort(key=lambda r: (-score_of(r), r["path"].name))
     cmd = args[0] if args else "list"
     if cmd == "list":
