@@ -8,13 +8,15 @@ Maintained by agents; Tend rebuilds it from the tree. A wrong row is a bug. Ever
 
 ## Tier budgets
 
-Measured wall-clock per tier on this machine, re-measured at every Tend. Fill from `scripts/gate.sh` output: the `<secs>s` on each stage line, summed per tier. Empty until measured; never a guess. A run past its budget is a finding about the harness.
+Measured wall-clock per tier on this machine, re-measured at every Tend. Fill from `scripts/gate.sh` output: the `<secs>s` on each stage line, summed per tier. Empty until measured; never a guess. Template numbers are the kv-python example on the template author's machine; replace them after adoption. A run past its budget is a finding about the harness.
 
 | Tier | Command | Budget | Measured on | Date |
 |---|---|---|---|---|
-| quick | `scripts/gate.sh <tree> quick` | | | |
-| harness | `scripts/gate.sh <tree> harness` | | | |
-| full | `scripts/gate.sh <tree> full` | | | |
+| quick | `scripts/gate.sh <tree> quick` | 5 s | 0.48 s (lint 0.06, kv-example 0.42) | 2026-11-09 |
+| harness | `scripts/gate.sh <tree> harness` | 10 s | 0.71 s (lint 0.06, kv-example 0.65) | 2026-11-09 |
+| full | `scripts/gate.sh <tree> full` | 30 s | 1.38 s (lint 0.06, kv-example 1.32) | 2026-11-09 |
+| tooling quick | `scripts/check-tooling.sh quick` | 30 s | 14.5 s | 2026-11-09 |
+| tooling harness | `scripts/check-tooling.sh harness` | 120 s | 74.9 s (test_factory 59.7) | 2026-11-09 |
 | mutants | Tend's mutation run over files changed since the last Tend, per file | | | |
 
 ## Sessions
